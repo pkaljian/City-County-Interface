@@ -2,53 +2,85 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Layer Color & Opacity Controller</title>
+  <title>Layer & Feature Styling App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- ArcGIS JS API (ESM) styles -->
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/@arcgis/core/assets/esri/themes/light/main.css" />
   <style>
     html, body, #viewDiv { height: 100%; margin: 0; }
     .panel {
       position: absolute; z-index: 5; top: 12px; left: 12px;
       background: rgba(255,255,255,.95); border-radius: 12px; padding: 12px 14px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 280px; font-family: ui-sans-serif, system-ui, Arial;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 320px; font-family: ui-sans-serif, system-ui, Arial;
+      max-height: calc(100% - 24px); overflow: auto;
     }
-    .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin: 10px 0; }
+    .section { margin-bottom: 14px; }
+    .section h3 { margin: 0 0 6px; font-size: 14px; }
+    .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin: 8px 0; }
     .row label { font-size: 13px; color: #333; }
-    .row input[type="range"] { width: 160px; }
     .muted { color: #666; font-size: 12px; }
     select, input, button {
-      border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+      border: 1px solid #d0d7de; border-radius: 8px; padding: 7px 10px; font-size: 13px;
     }
-    #status { font-size: 12px; color: #0b5; margin-top: 6px; min-height: 1em; }
+    input[type="range"] { width: 170px; }
+    .layer-list { border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px; background: #fafafa; }
+    .layer-item { display:flex; align-items:center; justify-content:space-between; padding:4px 6px; border-radius:6px; }
+    .layer-item:hover { background:#f0f3f6; }
+    #status { font-size: 12px; color: #0b5; min-height: 1em; margin-top: 6px; }
+    .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
+    .pill { display:inline-flex; gap:6px; align-items:center; font-size:12px; }
   </style>
 </head>
 <body>
   <div id="viewDiv"></div>
 
   <div class="panel">
-    <div class="row" style="grid-template-columns: 1fr;">
-      <label><strong>Layer color & transparency</strong></label>
-      <div class="muted">Connects to your AGOL web map; pick a layer and style it live.</div>
+    <div class="section">
+      <h3><strong>Layer & Feature Styling</strong></h3>
+      <div class="muted">Toggle layers, restyle a whole layer, or click one feature to recolor/adjust opacity (non-destructive).</div>
     </div>
 
-    <div class="row" style="grid-template-columns: 1fr;">
-      <label for="layerSelect">Target layer</label>
-      <select id="layerSelect"></select>
+    <div class="section">
+      <h3>Layers (visibility)</h3>
+      <div id="layersContainer" class="layer-list"></div>
     </div>
 
-    <div class="row">
-      <label for="colorPicker">Color</label>
-      <input id="colorPicker" type="color" value="#ff5500" />
+    <div class="section">
+      <h3>Target</h3>
+      <div class="row" style="grid-template-columns: 1fr;">
+        <label for="layerSelect">Active layer for styling</label>
+        <select id="layerSelect"></select>
+      </div>
+      <div class="row" style="grid-template-columns: 1fr;">
+        <div class="pill">
+          <input type="radio" id="applyLayer" name="applyScope" value="layer" checked />
+          <label for="applyLayer">Apply to <strong>Layer</strong></label>
+        </div>
+        <div class="pill">
+          <input type="radio" id="applyFeature" name="applyScope" value="feature" />
+          <label for="applyFeature">Apply to <strong>Selected feature</strong></label>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button id="selectFeatureBtn" title="Click, then pick a feature on the map">Select feature</button>
+        <button id="clearSelectionBtn" title="Clear selected feature">Clear selection</button>
+      </div>
+      <div class="muted" id="selectedInfo">No feature selected.</div>
     </div>
 
-    <div class="row">
-      <label for="opacitySlider">Opacity <span id="opacityValue" class="muted">1.00</span></label>
-      <input id="opacitySlider" type="range" min="0" max="1" step="0.01" value="1" />
-    </div>
-
-    <div class="row" style="grid-template-columns: 1fr;">
-      <button id="resetBtn" title="Reload original renderer">Reset layer style</button>
+    <div class="section">
+      <h3>Style</h3>
+      <div class="row">
+        <label for="colorPicker">Color</label>
+        <input id="colorPicker" type="color" value="#ff5500" />
+      </div>
+      <div class="row">
+        <label for="opacitySlider">Opacity <span id="opacityValue" class="muted">1.00</span></label>
+        <input id="opacitySlider" type="range" min="0" max="1" step="0.01" value="1" />
+      </div>
+      <div class="btn-row">
+        <button id="resetLayerBtn">Reset layer style</button>
+        <button id="resetFeatureBtn">Reset feature style</button>
+      </div>
     </div>
 
     <div id="status"></div>
@@ -58,107 +90,58 @@
     import WebMap from "https://js.arcgis.com/4.29/@arcgis/core/WebMap.js";
     import MapView from "https://js.arcgis.com/4.29/@arcgis/core/views/MapView.js";
     import Color from "https://js.arcgis.com/4.29/@arcgis/core/Color.js";
+    import GraphicsLayer from "https://js.arcgis.com/4.29/@arcgis/core/layers/GraphicsLayer.js";
+    import Graphic from "https://js.arcgis.com/4.29/@arcgis/core/Graphic.js";
 
-    // --- 🔧 REQUIRED: replace with your WebMap ID ---
-    const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c"; // e.g., "a12b3456789cdef0123456789abcde12"
-
-    // --- (Optional) start with this layer title; else the first stylable layer is selected ---
-    const PREFERRED_LAYER_TITLE = ""; // e.g., "Parcels" (leave "" to auto-select)
+    // --- REQUIRED: your WebMap ID ---
+    const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c";
 
     // Elements
+    const $layersContainer = document.getElementById("layersContainer");
     const $layerSelect = document.getElementById("layerSelect");
+    const $applyLayer = document.getElementById("applyLayer");
+    const $applyFeature = document.getElementById("applyFeature");
+    const $selectFeatureBtn = document.getElementById("selectFeatureBtn");
+    const $clearSelectionBtn = document.getElementById("clearSelectionBtn");
+    const $selectedInfo = document.getElementById("selectedInfo");
     const $color = document.getElementById("colorPicker");
     const $opacity = document.getElementById("opacitySlider");
     const $opacityValue = document.getElementById("opacityValue");
-    const $resetBtn = document.getElementById("resetBtn");
+    const $resetLayerBtn = document.getElementById("resetLayerBtn");
+    const $resetFeatureBtn = document.getElementById("resetFeatureBtn");
     const $status = document.getElementById("status");
 
-    let view;
+    const webmap = new WebMap({ portalItem: { id: WEBMAP_ID } });
+    const view = new MapView({ container: "viewDiv", map: webmap });
+
+    // Graphics layer for the "selected feature" overlay
+    const selectionOverlay = new GraphicsLayer({ title: "Selection Overlay", listMode: "hide" });
+    webmap.add(selectionOverlay);
+
+    // State
     let originalRenderers = new Map(); // layer.id -> renderer clone
     let originalOpacity = new Map();   // layer.id -> number
+    let selectMode = false;            // waiting for map click
+    let selected = { layerId: null, objectId: null }; // track selected feature
 
-    const webmap = new WebMap({
-      portalItem: { id: WEBMAP_ID }
-    });
-
-    view = new MapView({
-      container: "viewDiv",
-      map: webmap
-    });
-
-    // Utility: human-friendly feedback
     function say(msg, ok = true) {
       $status.style.color = ok ? "#0b5" : "#a00";
       $status.textContent = msg;
     }
 
-    // Populate layers that can be styled (FeatureLayer, MapImage sublayers w/ renderer)
-    async function populateLayerDropdown() {
-      await webmap.loadAll(); // ensures layers are ready
-      const candidates = [];
-
-      webmap.allLayers.forEach(layer => {
-        try {
-          // We only support layers with client-side renderers (FeatureLayer, GraphicsLayer).
-          // Tile layers/raster layers are not stylable this way.
-          const supported =
-            typeof layer.renderer !== "undefined" &&
-            typeof layer.geometryType !== "undefined" &&
-            layer.type !== "tile" &&
-            layer.type !== "imagery" &&
-            layer.type !== "wms";
-
-          if (supported) {
-            candidates.push(layer);
-            // store originals
-            if (!originalRenderers.has(layer.id) && layer.renderer) {
-              originalRenderers.set(layer.id, layer.renderer.clone());
-            }
-            if (!originalOpacity.has(layer.id)) {
-              originalOpacity.set(layer.id, layer.opacity ?? 1);
-            }
-          }
-        } catch { /* ignore */ }
-      });
-
-      if (!candidates.length) {
-        say("No stylable layers found in this web map.", false);
-        return;
-      }
-
-      // Fill select
-      $layerSelect.innerHTML = "";
-      candidates.forEach(layer => {
-        const opt = document.createElement("option");
-        opt.value = layer.id;
-        opt.textContent = layer.title || layer.id;
-        $layerSelect.appendChild(opt);
-      });
-
-      // Prefer requested title if present
-      if (PREFERRED_LAYER_TITLE) {
-        const match = candidates.find(l => (l.title || "").toLowerCase() === PREFERRED_LAYER_TITLE.toLowerCase());
-        if (match) $layerSelect.value = match.id;
-      }
-
-      // Initialize UI to selected layer's current values
-      applyUIFromLayer(getSelectedLayer());
-      say("Ready. Pick a layer and adjust color/opacity.");
-    }
-
-    function getSelectedLayer() {
-      const id = $layerSelect.value;
-      return webmap.allLayers.find(l => l.id === id);
+    function colorToHex(c) {
+      try {
+        const col = new Color(c);
+        const [r,g,b] = col.toRgb();
+        return "#" + [r,g,b].map(v => v.toString(16).padStart(2, "0")).join("");
+      } catch { return "#ff5500"; }
     }
 
     function hexFromLayer(layer) {
       try {
         const r = layer.renderer;
         if (!r) return "#ff5500";
-        // Try to read a representative symbol color
-        if (r.type === "simple") {
-          return colorToHex(r.symbol?.color);
-        }
+        if (r.type === "simple") return colorToHex(r.symbol?.color);
         if (r.type === "unique-value") {
           const sym = r.defaultSymbol || (r.uniqueValueInfos?.[0]?.symbol);
           return colorToHex(sym?.color);
@@ -167,44 +150,94 @@
           const sym = r.defaultSymbol || (r.classBreakInfos?.[0]?.symbol);
           return colorToHex(sym?.color);
         }
-      } catch { /* noop */ }
+      } catch {}
       return "#ff5500";
-    }
-
-    function colorToHex(c) {
-      try {
-        if (!c) return "#ff5500";
-        const col = new Color(c);
-        const [r,g,b] = col.toRgb();
-        return "#" + [r,g,b].map(v => v.toString(16).padStart(2, "0")).join("");
-      } catch {
-        return "#ff5500";
-      }
     }
 
     function applyUIFromLayer(layer) {
       if (!layer) return;
-      // Color (best-effort)
       $color.value = hexFromLayer(layer);
-      // Opacity
       const op = layer.opacity ?? 1;
-      $opacity.value = op;
-      $opacityValue.textContent = Number(op).toFixed(2);
+      $opacity.value = op; $opacityValue.textContent = Number(op).toFixed(2);
     }
 
-    // --- Core: update renderer colors regardless of renderer type ---
+    function getSelectedLayer() {
+      const id = $layerSelect.value;
+      return webmap.allLayers.find(l => l.id === id);
+    }
+
+    function buildLayerCheckbox(layer) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "layer-item";
+
+      const left = document.createElement("label");
+      left.style.display = "flex"; left.style.alignItems = "center"; left.style.gap = "8px";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = layer.visible;
+      cb.addEventListener("change", () => { layer.visible = cb.checked; });
+
+      const span = document.createElement("span");
+      span.textContent = layer.title || layer.id;
+
+      left.appendChild(cb);
+      left.appendChild(span);
+      wrapper.appendChild(left);
+
+      return wrapper;
+    }
+
+    async function bootstrap() {
+      await webmap.loadAll();
+
+      // Populate stylable layers (Feature/Graphics; exclude tiles/imagery/wms)
+      const stylable = [];
+      webmap.allLayers.forEach(layer => {
+        const supported =
+          typeof layer.renderer !== "undefined" &&
+          typeof layer.geometryType !== "undefined" &&
+          layer.type !== "tile" && layer.type !== "imagery" && layer.type !== "wms";
+        if (supported) {
+          stylable.push(layer);
+          if (!originalRenderers.has(layer.id) && layer.renderer) originalRenderers.set(layer.id, layer.renderer.clone());
+          if (!originalOpacity.has(layer.id)) originalOpacity.set(layer.id, layer.opacity ?? 1);
+        }
+      });
+
+      // Layer visibility UI (show all webmap layers, even if not stylable)
+      $layersContainer.innerHTML = "";
+      webmap.allLayers.forEach(layer => {
+        const row = buildLayerCheckbox(layer);
+        $layersContainer.appendChild(row);
+      });
+
+      // Fill target dropdown
+      $layerSelect.innerHTML = "";
+      stylable.forEach(layer => {
+        const opt = document.createElement("option");
+        opt.value = layer.id; opt.textContent = layer.title || layer.id;
+        $layerSelect.appendChild(opt);
+      });
+
+      if (stylable.length) {
+        applyUIFromLayer(stylable[0]);
+      } else {
+        say("No stylable layers found.", false);
+      }
+
+      say("Ready. Toggle layers; choose Layer or Selected feature, then style.");
+    }
+
+    // --- Layer-wide styling ---
     function setRendererColor(layer, hex) {
       if (!layer?.renderer) return;
-
       const newColor = new Color(hex);
       const r = layer.renderer.clone();
 
       const paintSymbol = (sym) => {
         if (!sym) return;
-        // Symbol families: point -> simple-marker/picture-marker, line -> simple-line, polygon -> simple-fill
-        // Most symbols have a 'color'. Outlines keep their original color.
         if ("color" in sym) sym.color = newColor;
-        // Handle CIM / symbol layers where applicable (best effort)
         if (sym.symbolLayers?.length) {
           sym.symbolLayers.forEach(sl => {
             if ("material" in sl && sl.material?.color) sl.material.color = newColor;
@@ -222,21 +255,14 @@
         if (r.defaultSymbol) paintSymbol(r.defaultSymbol);
         (r.classBreakInfos || []).forEach(cbi => paintSymbol(cbi.symbol));
       } else {
-        // Other renderers (e.g., heatmap) not supported for direct color edits
-        say(`Renderer "${r.type}" doesn’t support direct color changes.`, false);
+        say(`Renderer "${r.type}" can’t be recolored directly.`, false);
         return;
       }
-
       layer.renderer = r;
     }
 
-    // --- Opacity ---
-    function setLayerOpacity(layer, value) {
-      if (!layer) return;
-      layer.opacity = Number(value);
-    }
+    function setLayerOpacity(layer, value) { if (layer) layer.opacity = Number(value); }
 
-    // --- Reset ---
     function resetLayer(layer) {
       if (!layer) return;
       const origR = originalRenderers.get(layer.id);
@@ -247,34 +273,114 @@
       say("Layer style reset.");
     }
 
-    // Event wiring
+    // --- Selected feature styling (non-destructive overlay) ---
+    function clearSelectedGraphic() {
+      selectionOverlay.removeAll();
+      selected.layerId = null; selected.objectId = null;
+      $selectedInfo.textContent = "No feature selected.";
+    }
+
+    function buildSymbolForGeometry(geometryType, hex, opacity) {
+      const rgba = new Color(hex);
+      rgba.a = Number(opacity);
+      if (geometryType === "point" || geometryType === "multipoint") {
+        return {
+          type: "simple-marker",
+          color: rgba,
+          size: 10,
+          outline: { color: [0,0,0,0.3], width: 0.5 }
+        };
+      } else if (geometryType === "polyline") {
+        return {
+          type: "simple-line",
+          color: rgba,
+          width: 3
+        };
+      } else {
+        // polygon
+        return {
+          type: "simple-fill",
+          color: rgba,
+          outline: { color: [0,0,0,0.35], width: 1 }
+        };
+      }
+    }
+
+    function restyleSelectedGraphic() {
+      const g = selectionOverlay.graphics.getItemAt(0);
+      if (!g) return;
+      g.symbol = buildSymbolForGeometry(g.geometry.type, $color.value, $opacity.value);
+    }
+
+    // --- Events ---
     $layerSelect.addEventListener("change", () => {
-      const layer = getSelectedLayer();
-      applyUIFromLayer(layer);
-      say(`Selected layer: ${(layer?.title)||layer?.id||"?"}`);
+      applyUIFromLayer(getSelectedLayer());
+      say("Active layer changed.");
     });
 
-    $color.addEventListener("input", (e) => {
-      const layer = getSelectedLayer();
-      setRendererColor(layer, e.target.value);
-      say("Color updated.");
+    $color.addEventListener("input", () => {
+      if ($applyLayer.checked) {
+        setRendererColor(getSelectedLayer(), $color.value);
+        say("Layer color updated.");
+      } else {
+        restyleSelectedGraphic();
+        say("Feature color updated.");
+      }
     });
 
-    $opacity.addEventListener("input", (e) => {
-      const layer = getSelectedLayer();
-      const v = e.target.value;
-      setLayerOpacity(layer, v);
-      $opacityValue.textContent = Number(v).toFixed(2);
-      say("Opacity updated.");
+    $opacity.addEventListener("input", () => {
+      const v = $opacity.value; $opacityValue.textContent = Number(v).toFixed(2);
+      if ($applyLayer.checked) {
+        setLayerOpacity(getSelectedLayer(), v);
+        say("Layer opacity updated.");
+      } else {
+        restyleSelectedGraphic();
+        say("Feature opacity updated.");
+      }
     });
 
-    $resetBtn.addEventListener("click", () => resetLayer(getSelectedLayer()));
+    $resetLayerBtn.addEventListener("click", () => resetLayer(getSelectedLayer()));
+    $resetFeatureBtn.addEventListener("click", () => { clearSelectedGraphic(); say("Feature style cleared."); });
 
-    // Boot
-    view.when(populateLayerDropdown).catch(err => {
-      console.error(err);
-      say("Failed to load WebMap. Check the ID and sharing settings.", false);
+    $selectFeatureBtn.addEventListener("click", () => {
+      selectMode = true;
+      say("Click a feature on the map to select it.");
     });
+
+    $clearSelectionBtn.addEventListener("click", () => { clearSelectedGraphic(); say("Selection cleared."); });
+
+    view.on("click", async (event) => {
+      if (!selectMode && !$applyFeature.checked) return;
+      const activeLayer = getSelectedLayer();
+      if (!activeLayer) return;
+
+      const hit = await view.hitTest(event);
+      const layerHit = hit?.results?.find(r => r.graphic?.layer?.id === activeLayer.id);
+      if (!layerHit) {
+        say("No feature from the active layer at that location.", false);
+        return;
+      }
+
+      const g = layerHit.graphic;
+      // Track selection by OBJECTID if present; else fallback to null
+      const oidField = activeLayer.objectIdField || "OBJECTID";
+      selected.layerId = activeLayer.id;
+      selected.objectId = g.attributes?.[oidField] ?? null;
+
+      selectionOverlay.removeAll();
+      selectionOverlay.add(new Graphic({
+        geometry: g.geometry.clone(),
+        symbol: buildSymbolForGeometry(g.geometry.type, $color.value, $opacity.value),
+        attributes: { layerId: activeLayer.id, objectId: selected.objectId }
+      }));
+
+      $selectedInfo.textContent = `Selected feature in "${activeLayer.title || activeLayer.id}"` + (selected.objectId != null ? ` (OID ${selected.objectId})` : "");
+      say("Feature selected. Adjust color/opacity to restyle it.");
+      selectMode = false;
+    });
+
+    view.when(bootstrap).catch(err => { console.error(err); say("Failed to load WebMap.", false); });
   </script>
 </body>
 </html>
+
