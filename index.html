@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Parcels Styling App (Multi-Select + JPG Export)</title>
+  <title>Parcel Click-to-Select (Multi + JPG Export)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/@arcgis/core/assets/esri/themes/light/main.css" />
   <style>
@@ -28,38 +28,20 @@
     #status { font-size: 12px; color: #0b5; min-height: 1em; margin-top: 6px; }
     .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
     .pill { display:inline-flex; gap:6px; align-items:center; font-size:12px; }
-    button:disabled { opacity: .6; cursor: not-allowed; }
   </style>
 </head>
 <body>
-  <div id="viewDiv"></div>
+  <div id="viewDiv" title="Click parcels to toggle selection"></div>
 
   <div class="panel">
     <div class="section">
-      <h3><strong>Parcels Styling</strong></h3>
-      <div class="muted">Only parcel layers are selectable. Pick a parcel layer, select parcel(s), then set color/opacity. Export a JPG of the map.</div>
+      <h3><strong>Parcel Styling (Click to select)</strong></h3>
+      <div class="muted">Click parcels to toggle them on/off. Only “Sonoma County Parcels” and “Petaluma Parcels_22_0210” are selectable.</div>
     </div>
 
     <div class="section">
       <h3>Layers (visibility)</h3>
       <div id="layersContainer" class="layer-list"></div>
-    </div>
-
-    <div class="section">
-      <h3>Target parcel layer</h3>
-      <div class="row" style="grid-template-columns: 1fr;">
-        <label for="layerSelect">Active parcel layer</label>
-        <select id="layerSelect"></select>
-      </div>
-      <div class="btn-row">
-        <button id="selectFeatureBtn" title="Click, then pick parcel(s) on the map">Select parcel</button>
-        <label class="pill">
-          <input type="checkbox" id="multiToggle" />
-          Add to selection
-        </label>
-        <button id="clearSelectionBtn" title="Clear selected parcel(s)">Clear selection</button>
-      </div>
-      <div class="muted" id="selectedInfo">No parcels selected.</div>
     </div>
 
     <div class="section">
@@ -73,8 +55,9 @@
         <input id="opacitySlider" type="range" min="0" max="1" step="0.01" value="1" />
       </div>
       <div class="btn-row">
-        <button id="resetFeatureBtn">Reset parcel style</button>
+        <button id="clearSelectionBtn">Clear selection</button>
       </div>
+      <div class="muted" id="selectedInfo">No parcels selected.</div>
     </div>
 
     <div class="section">
@@ -102,38 +85,34 @@
     // --- REQUIRED: your WebMap ID ---
     const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c";
 
-    // ✅ Only these layers are selectable/targetable
+    // ✅ Only these layers are selectable
     const SELECTABLE_LAYER_TITLES = [
       "Sonoma County Parcels",
       "Petaluma Parcels_22_0210"
     ];
+    const selectableTitlesLower = SELECTABLE_LAYER_TITLES.map(t => t.toLowerCase());
 
     // Elements
     const $layersContainer = document.getElementById("layersContainer");
-    const $layerSelect = document.getElementById("layerSelect");
-    const $selectFeatureBtn = document.getElementById("selectFeatureBtn");
-    const $clearSelectionBtn = document.getElementById("clearSelectionBtn");
-    const $multiToggle = document.getElementById("multiToggle");
-    const $selectedInfo = document.getElementById("selectedInfo");
     const $color = document.getElementById("colorPicker");
     const $opacity = document.getElementById("opacitySlider");
     const $opacityValue = document.getElementById("opacityValue");
-    const $resetFeatureBtn = document.getElementById("resetFeatureBtn");
+    const $clearSelectionBtn = document.getElementById("clearSelectionBtn");
     const $exportJpgBtn = document.getElementById("exportJpgBtn");
     const $pixelRatio = document.getElementById("pixelRatio");
     const $pxrVal = document.getElementById("pxrVal");
+    const $selectedInfo = document.getElementById("selectedInfo");
     const $status = document.getElementById("status");
 
     const webmap = new WebMap({ portalItem: { id: WEBMAP_ID } });
     const view = new MapView({ container: "viewDiv", map: webmap });
 
-    // Graphics layer to draw selected features (non-destructive)
+    // Graphics layer to draw selected parcels (non-destructive)
     const selectionOverlay = new GraphicsLayer({ title: "Selection Overlay", listMode: "hide" });
     webmap.add(selectionOverlay);
 
     // State
-    let selectMode = false;              // waiting for clicks
-    const selectedSet = new Map();       // key -> Graphic
+    const selectedSet = new Map(); // key -> Graphic
 
     function say(msg, ok = true) {
       $status.style.color = ok ? "#0b5" : "#a00";
@@ -142,48 +121,44 @@
 
     function isSelectableLayer(layer) {
       const title = (layer.title || "").trim().toLowerCase();
-      return SELECTABLE_LAYER_TITLES.map(t => t.toLowerCase()).includes(title);
+      return selectableTitlesLower.includes(title);
     }
 
-    function colorToHex(c) {
-      try {
-        const col = new Color(c);
-        const [r,g,b] = col.toRgb();
-        return "#" + [r,g,b].map(v => v.toString(16).padStart(2, "0")).join("");
-      } catch { return "#ff5500"; }
+    function syncSelectedInfo() {
+      const count = selectionOverlay.graphics.length;
+      $selectedInfo.textContent = count ? `Selected parcels: ${count}` : "No parcels selected.";
     }
 
-    function hexFromLayer(layer) {
-      try {
-        const r = layer.renderer;
-        if (!r) return "#ff5500";
-        if (r.type === "simple") return colorToHex(r.symbol?.color);
-        if (r.type === "unique-value") {
-          const sym = r.defaultSymbol || (r.uniqueValueInfos?.[0]?.symbol);
-          return colorToHex(sym?.color);
-        }
-        if (r.type === "class-breaks") {
-          const sym = r.defaultSymbol || (r.classBreakInfos?.[0]?.symbol);
-          return colorToHex(sym?.color);
-        }
-      } catch {}
-      return "#ff5500";
+    function featureKey(layerId, objectId) { return `${layerId}|${objectId ?? crypto.randomUUID()}`; }
+
+    function buildParcelSymbol(hex, opacity) {
+      const rgba = new Color(hex); rgba.a = Number(opacity);
+      return { type: "simple-fill", color: rgba, outline: { color: [0,0,0,0.35], width: 1 } };
     }
 
-    function applyUIFromLayer(layer) {
-      if (!layer) return;
-      // Init UI from layer defaults (for convenience); applies to future selections
-      $color.value = hexFromLayer(layer);
-      const op = layer.opacity ?? 1;
-      $opacity.value = op; $opacityValue.textContent = Number(op).toFixed(2);
-      // Enable selection only for the designated parcel layers
-      const ok = isSelectableLayer(layer);
-      $selectFeatureBtn.disabled = !ok;
+    function restyleAllSelected() {
+      const color = $color.value, op = $opacity.value;
+      selectionOverlay.graphics.forEach(g => { g.symbol = buildParcelSymbol(color, op); });
     }
 
-    function getSelectedLayer() {
-      const id = $layerSelect.value;
-      return webmap.allLayers.find(l => l.id === id);
+    function toggleParcel(graphic, layerId, objectId) {
+      const key = featureKey(layerId, objectId);
+      if (selectedSet.has(key)) {
+        // remove
+        const g = selectedSet.get(key);
+        selectionOverlay.remove(g);
+        selectedSet.delete(key);
+      } else {
+        // add
+        const overlayGraphic = new Graphic({
+          geometry: graphic.geometry.clone(),
+          symbol: buildParcelSymbol($color.value, $opacity.value),
+          attributes: { layerId, objectId }
+        });
+        selectionOverlay.add(overlayGraphic);
+        selectedSet.set(key, overlayGraphic);
+      }
+      syncSelectedInfo();
     }
 
     function buildLayerCheckbox(layer) {
@@ -211,132 +186,67 @@
       $layersContainer.innerHTML = "";
       webmap.allLayers.forEach(layer => $layersContainer.appendChild(buildLayerCheckbox(layer)));
 
-      // Target dropdown = ONLY selectable parcel layers
-      const parcelLayers = webmap.allLayers
-        .filter(l => typeof l.geometryType !== "undefined" && isSelectableLayer(l));
-      $layerSelect.innerHTML = "";
-      parcelLayers.forEach(layer => {
-        const opt = document.createElement("option");
-        opt.value = layer.id; opt.textContent = layer.title || layer.id;
-        $layerSelect.appendChild(opt);
-      });
+      // Initialize UI from first selectable layer's defaults (if present)
+      const firstSelectable = webmap.allLayers.find(isSelectableLayer);
+      if (firstSelectable?.renderer) {
+        try {
+          const sym = firstSelectable.renderer.type === "simple"
+            ? firstSelectable.renderer.symbol
+            : (firstSelectable.renderer.defaultSymbol || firstSelectable.renderer.uniqueValueInfos?.[0]?.symbol || firstSelectable.renderer.classBreakInfos?.[0]?.symbol);
 
-      if (parcelLayers.length) {
-        applyUIFromLayer(parcelLayers[0]);
-      } else {
-        say("No parcel layers with the expected titles were found.", false);
+          if (sym?.color) $color.value = new Color(sym.color).toHex();
+          const op = firstSelectable.opacity ?? 1;
+          $opacity.value = op; $opacityValue.textContent = Number(op).toFixed(2);
+        } catch {}
       }
 
-      say("Ready. Select parcel(s), then style and export.");
+      say("Click parcels to toggle selection. Use color/opacity to style. Export JPG when ready.");
     }
 
-    // ---- Selected parcels (multi) ----
-    function featureKey(layerId, objectId) { return `${layerId}|${objectId ?? crypto.randomUUID()}`; }
+    // Update styles live
+    $color.addEventListener("input", () => { restyleAllSelected(); say("Updated color."); });
+    $opacity.addEventListener("input", () => {
+      const v = $opacity.value; $opacityValue.textContent = Number(v).toFixed(2);
+      restyleAllSelected(); say("Updated opacity.");
+    });
 
-    function buildSymbolForGeometry(geometryType, hex, opacity) {
-      const rgba = new Color(hex); rgba.a = Number(opacity);
-      if (geometryType === "point" || geometryType === "multipoint") {
-        return { type: "simple-marker", color: rgba, size: 10, outline: { color: [0,0,0,0.3], width: 0.5 } };
-      } else if (geometryType === "polyline") {
-        return { type: "simple-line", color: rgba, width: 3 };
-      } else {
-        // parcels are polygons
-        return { type: "simple-fill", color: rgba, outline: { color: [0,0,0,0.35], width: 1 } };
-      }
-    }
-
-    function syncSelectedInfo() {
-      const count = selectionOverlay.graphics.length;
-      $selectedInfo.textContent = count ? `Selected parcels: ${count}` : "No parcels selected.";
-    }
-
-    function addOrReplaceSelection(graphic, layerId, objectId) {
-      if (!$multiToggle.checked) {
-        selectionOverlay.removeAll();
-        selectedSet.clear();
-      }
-      const key = featureKey(layerId, objectId);
-      if (!selectedSet.has(key)) {
-        selectionOverlay.add(graphic);
-        selectedSet.set(key, graphic);
-      }
-      syncSelectedInfo();
-    }
-
-    function clearSelection() {
+    $clearSelectionBtn.addEventListener("click", () => {
       selectionOverlay.removeAll();
       selectedSet.clear();
       syncSelectedInfo();
-    }
+      say("Selection cleared.");
+    });
 
-    function restyleAllSelected() {
-      const color = $color.value, op = $opacity.value;
-      selectionOverlay.graphics.forEach(g => {
-        g.symbol = buildSymbolForGeometry(g.geometry.type, color, op);
-      });
-    }
-
-    // ---- Export JPG ----
-    async function exportJpg() {
+    // Export JPG
+    $pixelRatio.addEventListener("input", () => { $pxrVal.textContent = Number($pixelRatio.value).toFixed(1); });
+    $exportJpgBtn.addEventListener("click", async () => {
       try {
         const ratio = Number($pixelRatio.value) || 1;
         const shot = await view.takeScreenshot({ format: "jpg", quality: 0.92, width: view.width * ratio, height: view.height * ratio });
         const a = document.createElement("a");
         a.href = shot.dataUrl;
         a.download = `map_export_${Date.now()}.jpg`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        document.body.appendChild(a); a.click(); a.remove();
         say("JPG exported.");
-      } catch (e) {
-        console.error(e);
-        say("Export failed.", false);
-      }
-    }
-
-    // ---- Events ----
-    $layerSelect.addEventListener("change", () => { applyUIFromLayer(getSelectedLayer()); say("Active parcel layer changed."); });
-
-    $color.addEventListener("input", () => { restyleAllSelected(); say("Selected parcel color updated."); });
-
-    $opacity.addEventListener("input", () => {
-      const v = $opacity.value; $opacityValue.textContent = Number(v).toFixed(2);
-      restyleAllSelected(); say("Selected parcel opacity updated.");
+      } catch (e) { console.error(e); say("Export failed.", false); }
     });
 
-    $resetFeatureBtn.addEventListener("click", () => { clearSelection(); say("Parcel styles cleared."); });
-
-    $selectFeatureBtn.addEventListener("click", () => { selectMode = true; say("Click parcel(s) on the map."); });
-    $clearSelectionBtn.addEventListener("click", () => { clearSelection(); say("Selection cleared."); });
-
-    $pixelRatio.addEventListener("input", () => { $pxrVal.textContent = Number($pixelRatio.value).toFixed(1); });
-    $exportJpgBtn.addEventListener("click", exportJpg);
-
-    // Only accept hits from the active parcel layer
+    // Click-to-toggle selection (topmost parcel hit from the allowed layers)
     view.on("click", async (event) => {
-      if (!selectMode) return;
-      const activeLayer = getSelectedLayer(); if (!activeLayer) return;
-      if (!isSelectableLayer(activeLayer)) { say("Select a parcel layer first.", false); return; }
-
       const hit = await view.hitTest(event);
-      const matches = (hit?.results ?? []).filter(r => r.graphic?.layer?.id === activeLayer.id);
-      if (!matches.length) { say("No parcel at that location in the active layer.", false); return; }
+      if (!hit?.results?.length) { say("No feature here."); return; }
 
-      for (const m of matches) {
-        const g = m.graphic;
-        const oidField = activeLayer.objectIdField || "OBJECTID";
-        const objectId = g.attributes?.[oidField] ?? null;
+      // Find the first hit that belongs to an allowed parcel layer
+      const match = hit.results.find(r => r.graphic?.layer && isSelectableLayer(r.graphic.layer));
+      if (!match) { say("Clicked feature isn’t a parcel in the allowed layers.", false); return; }
 
-        const overlayGraphic = new Graphic({
-          geometry: g.geometry.clone(),
-          symbol: buildSymbolForGeometry(g.geometry.type, $color.value, $opacity.value),
-          attributes: { layerId: activeLayer.id, objectId }
-        });
-        addOrReplaceSelection(overlayGraphic, activeLayer.id, objectId);
-      }
+      const lyr = match.graphic.layer;
+      const g = match.graphic;
+      const oidField = lyr.objectIdField || "OBJECTID";
+      const objectId = g.attributes?.[oidField] ?? null;
 
-      selectMode = false; // click Select again to re-enter
-      say($multiToggle.checked ? "Parcel(s) added to selection." : "Parcel selected.");
+      toggleParcel(g, lyr.id, objectId);
+      say("Toggled parcel selection.");
     });
 
     view.when(bootstrap).catch(err => { console.error(err); say("Failed to load WebMap.", false); });
