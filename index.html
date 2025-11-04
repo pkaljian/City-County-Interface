@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Layer Color & Opacity Controller</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- ArcGIS JS API (ESM) styles -->
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/@arcgis/core/assets/esri/themes/light/main.css" />
+  <style>
+    html, body, #viewDiv { height: 100%; margin: 0; }
+    .panel {
+      position: absolute; z-index: 5; top: 12px; left: 12px;
+      background: rgba(255,255,255,.95); border-radius: 12px; padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 280px; font-family: ui-sans-serif, system-ui, Arial;
+    }
+    .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; margin: 10px 0; }
+    .row label { font-size: 13px; color: #333; }
+    .row input[type="range"] { width: 160px; }
+    .muted { color: #666; font-size: 12px; }
+    select, input, button {
+      border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    }
+    #status { font-size: 12px; color: #0b5; margin-top: 6px; min-height: 1em; }
+  </style>
+</head>
+<body>
+  <div id="viewDiv"></div>
+
+  <div class="panel">
+    <div class="row" style="grid-template-columns: 1fr;">
+      <label><strong>Layer color & transparency</strong></label>
+      <div class="muted">Connects to your AGOL web map; pick a layer and style it live.</div>
+    </div>
+
+    <div class="row" style="grid-template-columns: 1fr;">
+      <label for="layerSelect">Target layer</label>
+      <select id="layerSelect"></select>
+    </div>
+
+    <div class="row">
+      <label for="colorPicker">Color</label>
+      <input id="colorPicker" type="color" value="#ff5500" />
+    </div>
+
+    <div class="row">
+      <label for="opacitySlider">Opacity <span id="opacityValue" class="muted">1.00</span></label>
+      <input id="opacitySlider" type="range" min="0" max="1" step="0.01" value="1" />
+    </div>
+
+    <div class="row" style="grid-template-columns: 1fr;">
+      <button id="resetBtn" title="Reload original renderer">Reset layer style</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <script type="module">
+    import WebMap from "https://js.arcgis.com/4.29/@arcgis/core/WebMap.js";
+    import MapView from "https://js.arcgis.com/4.29/@arcgis/core/views/MapView.js";
+    import Color from "https://js.arcgis.com/4.29/@arcgis/core/Color.js";
+
+    // --- 🔧 REQUIRED: replace with your WebMap ID ---
+    const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c"; // e.g., "a12b3456789cdef0123456789abcde12"
+
+    // --- (Optional) start with this layer title; else the first stylable layer is selected ---
+    const PREFERRED_LAYER_TITLE = ""; // e.g., "Parcels" (leave "" to auto-select)
+
+    // Elements
+    const $layerSelect = document.getElementById("layerSelect");
+    const $color = document.getElementById("colorPicker");
+    const $opacity = document.getElementById("opacitySlider");
+    const $opacityValue = document.getElementById("opacityValue");
+    const $resetBtn = document.getElementById("resetBtn");
+    const $status = document.getElementById("status");
+
+    let view;
+    let originalRenderers = new Map(); // layer.id -> renderer clone
+    let originalOpacity = new Map();   // layer.id -> number
+
+    const webmap = new WebMap({
+      portalItem: { id: WEBMAP_ID }
+    });
+
+    view = new MapView({
+      container: "viewDiv",
+      map: webmap
+    });
+
+    // Utility: human-friendly feedback
+    function say(msg, ok = true) {
+      $status.style.color = ok ? "#0b5" : "#a00";
+      $status.textContent = msg;
+    }
+
+    // Populate layers that can be styled (FeatureLayer, MapImage sublayers w/ renderer)
+    async function populateLayerDropdown() {
+      await webmap.loadAll(); // ensures layers are ready
+      const candidates = [];
+
+      webmap.allLayers.forEach(layer => {
+        try {
+          // We only support layers with client-side renderers (FeatureLayer, GraphicsLayer).
+          // Tile layers/raster layers are not stylable this way.
+          const supported =
+            typeof layer.renderer !== "undefined" &&
+            typeof layer.geometryType !== "undefined" &&
+            layer.type !== "tile" &&
+            layer.type !== "imagery" &&
+            layer.type !== "wms";
+
+          if (supported) {
+            candidates.push(layer);
+            // store originals
+            if (!originalRenderers.has(layer.id) && layer.renderer) {
+              originalRenderers.set(layer.id, layer.renderer.clone());
+            }
+            if (!originalOpacity.has(layer.id)) {
+              originalOpacity.set(layer.id, layer.opacity ?? 1);
+            }
+          }
+        } catch { /* ignore */ }
+      });
+
+      if (!candidates.length) {
+        say("No stylable layers found in this web map.", false);
+        return;
+      }
+
+      // Fill select
+      $layerSelect.innerHTML = "";
+      candidates.forEach(layer => {
+        const opt = document.createElement("option");
+        opt.value = layer.id;
+        opt.textContent = layer.title || layer.id;
+        $layerSelect.appendChild(opt);
+      });
+
+      // Prefer requested title if present
+      if (PREFERRED_LAYER_TITLE) {
+        const match = candidates.find(l => (l.title || "").toLowerCase() === PREFERRED_LAYER_TITLE.toLowerCase());
+        if (match) $layerSelect.value = match.id;
+      }
+
+      // Initialize UI to selected layer's current values
+      applyUIFromLayer(getSelectedLayer());
+      say("Ready. Pick a layer and adjust color/opacity.");
+    }
+
+    function getSelectedLayer() {
+      const id = $layerSelect.value;
+      return webmap.allLayers.find(l => l.id === id);
+    }
+
+    function hexFromLayer(layer) {
+      try {
+        const r = layer.renderer;
+        if (!r) return "#ff5500";
+        // Try to read a representative symbol color
+        if (r.type === "simple") {
+          return colorToHex(r.symbol?.color);
+        }
+        if (r.type === "unique-value") {
+          const sym = r.defaultSymbol || (r.uniqueValueInfos?.[0]?.symbol);
+          return colorToHex(sym?.color);
+        }
+        if (r.type === "class-breaks") {
+          const sym = r.defaultSymbol || (r.classBreakInfos?.[0]?.symbol);
+          return colorToHex(sym?.color);
+        }
+      } catch { /* noop */ }
+      return "#ff5500";
+    }
+
+    function colorToHex(c) {
+      try {
+        if (!c) return "#ff5500";
+        const col = new Color(c);
+        const [r,g,b] = col.toRgb();
+        return "#" + [r,g,b].map(v => v.toString(16).padStart(2, "0")).join("");
+      } catch {
+        return "#ff5500";
+      }
+    }
+
+    function applyUIFromLayer(layer) {
+      if (!layer) return;
+      // Color (best-effort)
+      $color.value = hexFromLayer(layer);
+      // Opacity
+      const op = layer.opacity ?? 1;
+      $opacity.value = op;
+      $opacityValue.textContent = Number(op).toFixed(2);
+    }
+
+    // --- Core: update renderer colors regardless of renderer type ---
+    function setRendererColor(layer, hex) {
+      if (!layer?.renderer) return;
+
+      const newColor = new Color(hex);
+      const r = layer.renderer.clone();
+
+      const paintSymbol = (sym) => {
+        if (!sym) return;
+        // Symbol families: point -> simple-marker/picture-marker, line -> simple-line, polygon -> simple-fill
+        // Most symbols have a 'color'. Outlines keep their original color.
+        if ("color" in sym) sym.color = newColor;
+        // Handle CIM / symbol layers where applicable (best effort)
+        if (sym.symbolLayers?.length) {
+          sym.symbolLayers.forEach(sl => {
+            if ("material" in sl && sl.material?.color) sl.material.color = newColor;
+            if ("color" in sl) sl.color = newColor;
+          });
+        }
+      };
+
+      if (r.type === "simple") {
+        paintSymbol(r.symbol);
+      } else if (r.type === "unique-value") {
+        if (r.defaultSymbol) paintSymbol(r.defaultSymbol);
+        (r.uniqueValueInfos || []).forEach(uvi => paintSymbol(uvi.symbol));
+      } else if (r.type === "class-breaks") {
+        if (r.defaultSymbol) paintSymbol(r.defaultSymbol);
+        (r.classBreakInfos || []).forEach(cbi => paintSymbol(cbi.symbol));
+      } else {
+        // Other renderers (e.g., heatmap) not supported for direct color edits
+        say(`Renderer "${r.type}" doesn’t support direct color changes.`, false);
+        return;
+      }
+
+      layer.renderer = r;
+    }
+
+    // --- Opacity ---
+    function setLayerOpacity(layer, value) {
+      if (!layer) return;
+      layer.opacity = Number(value);
+    }
+
+    // --- Reset ---
+    function resetLayer(layer) {
+      if (!layer) return;
+      const origR = originalRenderers.get(layer.id);
+      const origO = originalOpacity.get(layer.id);
+      if (origR) layer.renderer = origR.clone();
+      if (typeof origO === "number") layer.opacity = origO;
+      applyUIFromLayer(layer);
+      say("Layer style reset.");
+    }
+
+    // Event wiring
+    $layerSelect.addEventListener("change", () => {
+      const layer = getSelectedLayer();
+      applyUIFromLayer(layer);
+      say(`Selected layer: ${(layer?.title)||layer?.id||"?"}`);
+    });
+
+    $color.addEventListener("input", (e) => {
+      const layer = getSelectedLayer();
+      setRendererColor(layer, e.target.value);
+      say("Color updated.");
+    });
+
+    $opacity.addEventListener("input", (e) => {
+      const layer = getSelectedLayer();
+      const v = e.target.value;
+      setLayerOpacity(layer, v);
+      $opacityValue.textContent = Number(v).toFixed(2);
+      say("Opacity updated.");
+    });
+
+    $resetBtn.addEventListener("click", () => resetLayer(getSelectedLayer()));
+
+    // Boot
+    view.when(populateLayerDropdown).catch(err => {
+      console.error(err);
+      say("Failed to load WebMap. Check the ID and sharing settings.", false);
+    });
+  </script>
+</body>
+</html>
