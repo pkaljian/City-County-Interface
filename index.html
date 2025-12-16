@@ -164,13 +164,28 @@
         const overlayGraphic = new Graphic({
           geometry: graphic.geometry.clone(),
           symbol: buildParcelSymbol($color.value, $opacity.value),
-          attributes: { layerId, objectId }
+          attributes: { layerId, objectId, label: getParcelLabel(graphic) }
+
         });
         selectionOverlay.add(overlayGraphic);
         selectedSet.set(key, overlayGraphic);
       }
       syncSelectedInfo();
     }
+function getParcelLabel(g) {
+  const a = g?.attributes || {};
+  const candidates = [
+    "SITE_ADDR", "FULLADDR", "ADDRESS", "ADDR", "SITUSADDR", "SITUS",
+    "APN", "APN_NUM", "PARCELAPN"
+  ];
+
+  for (const k of candidates) {
+    const v = a[k];
+    if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
+  }
+
+  return "Project Site";
+}
 
     function buildLayerCheckbox(layer) {
       const wrapper = document.createElement("div");
@@ -358,7 +373,7 @@
       // Title
       const title = getTitleText() || "Project Site Map";
       ctx.fillStyle = "#111";
-      ctx.font = `700 ${Math.floor(18 * ratio)}px system-ui, Arial`;
+      ctx.font = `800 ${Math.floor(32 * ratio)}px system-ui, Arial`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(title, x0 + contentW / 2, y0 + headerH / 2);
@@ -393,33 +408,70 @@
 
       ctx.fillStyle = "#111";
       ctx.font = `${Math.floor(16 * ratio)}px system-ui, Arial`;
-      const legendLabel = selectionOverlay.graphics.length === 1 ? "Selected parcel" : `Selected parcels (${selectionOverlay.graphics.length})`;
-      ctx.fillText(legendLabel, legendX + sw + Math.floor(12 * ratio), legendY + Math.floor(sw * 0.75));
+      const labels = selectionOverlay.graphics
+  .map(g => g.attributes?.label)
+  .filter(Boolean);
 
-      // Attribution / disclaimer (professional)
-      ctx.fillStyle = "#444";
-      ctx.font = `${Math.floor(10.5 * ratio)}px system-ui, Arial`;
-      const lines = [
-        "Sources: Esri; Permit Sonoma; City of Petaluma; and other contributing data providers.",
-        "Map prepared via a third-party web mapping application accessed by a City contractor.",
-        "This map is for general reference only to illustrate the project site in connection with required public notice materials."
-      ];
-      let ty = legendY + sw + Math.floor(18 * ratio);
-      for (const line of lines) {
-        ctx.fillText(line, legendX, ty);
-        ty += Math.floor(14 * ratio);
-      }
+ctx.font = `${Math.floor(16 * ratio)}px system-ui, Arial`;
+
+if (!labels.length) {
+  ctx.fillText("No parcel selected", legendX + sw + Math.floor(12 * ratio), legendY + Math.floor(sw * 0.75));
+} else {
+  const maxLines = 3;
+  const show = labels.slice(0, maxLines);
+  const more = labels.length - show.length;
+
+  let ly = legendY + Math.floor(sw * 0.75);
+  for (const line of show) {
+    ctx.fillText(line, legendX + sw + Math.floor(12 * ratio), ly);
+    ly += Math.floor(18 * ratio);
+  }
+  if (more > 0) {
+    ctx.fillText(`+${more} more`, legendX + sw + Math.floor(12 * ratio), ly);
+  }
+}
+
+     // Attribution / disclaimer (professional) — bottom-right
+ctx.fillStyle = "#444";
+ctx.font = `${Math.floor(10.5 * ratio)}px system-ui, Arial`;
+
+const lines = [
+  "Sources: Esri; Permit Sonoma; City of Petaluma; and other contributing data providers.",
+  "Map prepared via a third-party web mapping application accessed by a City contractor.",
+  "This map is for general reference only to illustrate the project site in connection with required public notice materials."
+];
+
+const lineH = Math.floor(14 * ratio);
+ctx.textAlign = "right";
+ctx.textBaseline = "alphabetic";
+
+// anchor inside border, bottom-right
+const attrX = x0 + contentW - pad;
+let attrY = footerTop + footerH - pad;
+
+// draw upward so it sits low
+for (let i = lines.length - 1; i >= 0; i--) {
+  ctx.fillText(lines[i], attrX, attrY);
+  attrY -= lineH;
+}
+
+// restore
+ctx.textAlign = "left";
 
       // North arrow + scalebar on right
-      const rightX = x0 + contentW - pad;
-      const arrowX = rightX - Math.floor(90 * ratio);
-      const arrowY = footerTop + pad + Math.floor(24 * ratio);
-      drawNorthArrow(ctx, arrowX, arrowY, Math.floor(22 * ratio), ratio);
+    const rightX = x0 + contentW - pad;
 
-      const scaleBarWidth = Math.floor(240 * ratio);
-      const scaleX = rightX - scaleBarWidth;
-      const scaleY = footerTop + pad + Math.floor(34 * ratio);
-      drawScaleBarDetailed(ctx, view, scaleX, scaleY, scaleBarWidth, ratio);
+// keep scalebar on the right but pull it LEFT so the units ("m"/"km") stay inside border
+const scaleBarWidth = Math.floor(240 * ratio);
+const scaleX = rightX - scaleBarWidth - Math.floor(14 * ratio);
+const scaleY = footerTop + pad + Math.floor(34 * ratio);
+drawScaleBarDetailed(ctx, view, scaleX, scaleY, scaleBarWidth, ratio);
+
+// move north arrow to the LEFT of scalebar to avoid overlap
+const arrowGap = Math.floor(20 * ratio);
+const arrowX = scaleX - arrowGap;
+const arrowY = footerTop + pad + Math.floor(24 * ratio);
+drawNorthArrow(ctx, arrowX, arrowY, Math.floor(22 * ratio), ratio);
 
       // Export
       const outUrl = canvas.toDataURL("image/jpeg", 0.92);
