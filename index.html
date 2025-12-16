@@ -81,6 +81,8 @@
     import Color from "https://js.arcgis.com/4.29/@arcgis/core/Color.js";
     import GraphicsLayer from "https://js.arcgis.com/4.29/@arcgis/core/layers/GraphicsLayer.js";
     import Graphic from "https://js.arcgis.com/4.29/@arcgis/core/Graphic.js";
+    import Search from "https://js.arcgis.com/4.29/@arcgis/core/widgets/Search.js";
+    import FeatureLayer from "https://js.arcgis.com/4.29/@arcgis/core/layers/FeatureLayer.js";
 
     // --- REQUIRED: your WebMap ID ---
     const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c";
@@ -181,6 +183,37 @@
 
     async function bootstrap() {
       await webmap.loadAll();
+// Find the parcel layer you want to search against
+const parcelLayer = webmap.allLayers.find(l => (l.title || "").toLowerCase() === "petaluma parcels_22_0210") 
+  || webmap.allLayers.find(l => (l.title || "").toLowerCase() === "sonoma county parcels");
+
+// If your parcels layer is a FeatureLayer, you can add a FeatureLayer search source.
+// IMPORTANT: use fields that actually exist in your layer (examples: "SITE_ADDR", "FULLADDR", "APN")
+const parcelSource = parcelLayer && parcelLayer.type === "feature"
+  ? {
+      layer: parcelLayer,
+      searchFields: ["SITE_ADDR", "FULLADDR", "APN"],
+      displayField: "SITE_ADDR",
+      exactMatch: false,
+      outFields: ["*"],
+      name: parcelLayer.title,
+      placeholder: "Address or APN (parcel layer)"
+    }
+  : null;
+
+const search = new Search({
+  view,
+  includeDefaultSources: true,        // World geocoder
+  popupEnabled: false,
+  resultGraphicEnabled: true,
+  sources: [
+    ...(parcelSource ? [parcelSource] : []),
+    // keep the default geocoder too (user can type any address)
+  ]
+});
+
+// Put it in your existing left panel (cleanest)
+document.querySelector(".panel").prepend(search.container);
 
       // Build visibility list (all layers)
       $layersContainer.innerHTML = "";
@@ -218,18 +251,152 @@
     });
 
     // Export JPG
-    $pixelRatio.addEventListener("input", () => { $pxrVal.textContent = Number($pixelRatio.value).toFixed(1); });
-    $exportJpgBtn.addEventListener("click", async () => {
-      try {
-        const ratio = Number($pixelRatio.value) || 1;
-        const shot = await view.takeScreenshot({ format: "jpg", quality: 0.92, width: view.width * ratio, height: view.height * ratio });
-        const a = document.createElement("a");
-        a.href = shot.dataUrl;
-        a.download = `map_export_${Date.now()}.jpg`;
-        document.body.appendChild(a); a.click(); a.remove();
-        say("JPG exported.");
-      } catch (e) { console.error(e); say("Export failed.", false); }
-    });
+   function fmtDate(d = new Date()) {
+  const mm = String(d.getMonth() + 1).padStart(2,"0");
+  const dd = String(d.getDate()).padStart(2,"0");
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function getSelectedLabel() {
+  // you can improve this by storing address/APN when selecting
+  const n = selectionOverlay.graphics.length;
+  return n === 1 ? "Selected parcel" : `Selected parcels (${n})`;
+}
+
+// simple north arrow (triangle) drawn in footer
+function drawNorthArrow(ctx, x, y, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.7, size);
+  ctx.lineTo(-size * 0.7, size);
+  ctx.closePath();
+  ctx.fillStyle = "#111";
+  ctx.fill();
+  ctx.restore();
+}
+
+// very simple scalebar: choose a nice round distance near ~1/5 of map width
+function niceScaleDistance(meters) {
+  const pow10 = Math.pow(10, Math.floor(Math.log10(meters)));
+  const n = meters / pow10;
+  const nice = n >= 5 ? 5 : n >= 2 ? 2 : 1;
+  return nice * pow10;
+}
+
+function drawScaleBar(ctx, view, x, y, pxWidth) {
+  // approx meters-per-pixel at center latitude
+  const lat = view.center?.latitude ?? 0;
+  const mPerPx = view.resolution * (Math.cos(lat * Math.PI/180) || 1); // decent approximation for web mercator
+  const targetMeters = mPerPx * pxWidth * 0.35;
+  const distMeters = niceScaleDistance(targetMeters);
+  const barPx = distMeters / mPerPx;
+
+  // draw bar
+  ctx.save();
+  ctx.strokeStyle = "#111";
+  ctx.fillStyle = "#111";
+  ctx.lineWidth = 2;
+
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + barPx, y);
+  ctx.stroke();
+
+  // ticks
+  ctx.beginPath();
+  ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
+  ctx.moveTo(x + barPx, y - 8); ctx.lineTo(x + barPx, y + 8);
+  ctx.stroke();
+
+  // label
+  const label = distMeters >= 1000 ? `${(distMeters/1000).toFixed(distMeters % 1000 === 0 ? 0 : 1)} km` : `${Math.round(distMeters)} m`;
+  ctx.font = "12px system-ui, Arial";
+  ctx.fillText(label, x, y - 12);
+  ctx.restore();
+}
+
+async function exportLayoutJpg() {
+  const ratio = Number($pixelRatio.value) || 1;
+
+  // 1) get map image
+  const shot = await view.takeScreenshot({
+    format: "png",
+    quality: 1,
+    width: Math.floor(view.width * ratio),
+    height: Math.floor(view.height * ratio)
+  });
+
+  // 2) create layout canvas (map + footer)
+  const footerH = Math.floor(110 * ratio);
+  const W = shot.data.width;
+  const H = shot.data.height + footerH;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  // background
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, W, H);
+
+  // draw map image
+  const img = new Image();
+  img.src = shot.dataUrl;
+  await img.decode();
+  ctx.drawImage(img, 0, 0, W, shot.data.height);
+
+  // footer divider line
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = Math.max(1, Math.floor(1 * ratio));
+  ctx.beginPath();
+  ctx.moveTo(0, shot.data.height);
+  ctx.lineTo(W, shot.data.height);
+  ctx.stroke();
+
+  // footer content
+  const pad = Math.floor(14 * ratio);
+  const footerTop = shot.data.height;
+  const midY = footerTop + Math.floor(footerH / 2);
+
+  // left: date + legend
+  ctx.fillStyle = "#111";
+  ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
+  ctx.fillText(fmtDate(), pad, footerTop + pad + Math.floor(12 * ratio));
+
+  // legend swatch (use current selection color)
+  const sw = Math.floor(26 * ratio);
+  const lx = pad;
+  const ly = footerTop + Math.floor(footerH * 0.55) - Math.floor(sw/2);
+
+  ctx.strokeStyle = $color.value;
+  ctx.lineWidth = Math.max(2, Math.floor(3 * ratio));
+  ctx.strokeRect(lx, ly, sw, sw);
+
+  ctx.fillStyle = "#111";
+  ctx.font = `${Math.floor(13 * ratio)}px system-ui, Arial`;
+  ctx.fillText(getSelectedLabel(), lx + sw + Math.floor(10 * ratio), ly + Math.floor(sw*0.72));
+
+  // center/right: north arrow + scalebar
+  const nx = Math.floor(W * 0.62);
+  drawNorthArrow(ctx, nx, midY, Math.floor(18 * ratio));
+  drawScaleBar(ctx, view, nx + Math.floor(45 * ratio), midY + Math.floor(18 * ratio), W);
+
+  // optional: title bottom-right
+  ctx.font = `${Math.floor(11 * ratio)}px system-ui, Arial`;
+  ctx.fillStyle = "#444";
+  ctx.fillText("City of Petaluma", W - pad - Math.floor(140 * ratio), footerTop + footerH - pad);
+
+  // 3) export canvas as JPG
+  const outUrl = canvas.toDataURL("image/jpeg", 0.92);
+  const a = document.createElement("a");
+  a.href = outUrl;
+  a.download = `parcel_map_${Date.now()}.jpg`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
 
     // Click-to-toggle selection (topmost parcel hit from the allowed layers)
     view.on("click", async (event) => {
