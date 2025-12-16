@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Parcel Click-to-Select (Multi + JPG Export)</title>
+  <title>Parcel Click-to-Select (Layout JPG Export)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/@arcgis/core/assets/esri/themes/light/main.css" />
   <style>
@@ -10,7 +10,7 @@
     .panel {
       position: absolute; z-index: 5; top: 12px; left: 12px;
       background: rgba(255,255,255,.95); border-radius: 12px; padding: 12px 14px;
-      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 340px; font-family: ui-sans-serif, system-ui, Arial;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12); min-width: 360px; font-family: ui-sans-serif, system-ui, Arial;
       max-height: calc(100% - 24px); overflow: auto;
     }
     .section { margin-bottom: 14px; }
@@ -27,9 +27,10 @@
     .layer-item:hover { background:#f0f3f6; }
     #status { font-size: 12px; color: #0b5; min-height: 1em; margin-top: 6px; }
     .btn-row { display:flex; gap:8px; flex-wrap:wrap; }
-    .pill { display:inline-flex; gap:6px; align-items:center; font-size:12px; }
+    .search-holder { margin: 10px 0 12px; }
   </style>
 </head>
+
 <body>
   <div id="viewDiv" title="Click parcels to toggle selection"></div>
 
@@ -37,6 +38,7 @@
     <div class="section">
       <h3><strong>Parcel Styling (Click to select)</strong></h3>
       <div class="muted">Click parcels to toggle them on/off. Only “Sonoma County Parcels” and “Petaluma Parcels_22_0210” are selectable.</div>
+      <div id="searchHolder" class="search-holder"></div>
     </div>
 
     <div class="section">
@@ -61,8 +63,14 @@
     </div>
 
     <div class="section">
-      <h3>Export</h3>
+      <h3>Export (Layout JPG)</h3>
       <div class="row">
+        <label for="mapTitle">Title</label>
+        <input id="mapTitle" type="text" maxlength="70" placeholder="e.g., 307 Kent St" />
+      </div>
+      <div class="muted" style="margin-top:-4px;">Max 70 characters.</div>
+
+      <div class="row" style="margin-top:10px;">
         <label for="pixelRatio">Pixel ratio <span id="pxrVal" class="muted">1.0</span></label>
         <input id="pixelRatio" type="range" min="1" max="3" step="0.1" value="1" />
       </div>
@@ -82,7 +90,6 @@
     import GraphicsLayer from "https://js.arcgis.com/4.29/@arcgis/core/layers/GraphicsLayer.js";
     import Graphic from "https://js.arcgis.com/4.29/@arcgis/core/Graphic.js";
     import Search from "https://js.arcgis.com/4.29/@arcgis/core/widgets/Search.js";
-    import FeatureLayer from "https://js.arcgis.com/4.29/@arcgis/core/layers/FeatureLayer.js";
 
     // --- REQUIRED: your WebMap ID ---
     const WEBMAP_ID = "d2e42cb6b87c4126b2e609a362d82c1c";
@@ -105,6 +112,8 @@
     const $pxrVal = document.getElementById("pxrVal");
     const $selectedInfo = document.getElementById("selectedInfo");
     const $status = document.getElementById("status");
+    const $searchHolder = document.getElementById("searchHolder");
+    const $mapTitle = document.getElementById("mapTitle");
 
     const webmap = new WebMap({ portalItem: { id: WEBMAP_ID } });
     const view = new MapView({ container: "viewDiv", map: webmap });
@@ -131,7 +140,9 @@
       $selectedInfo.textContent = count ? `Selected parcels: ${count}` : "No parcels selected.";
     }
 
-    function featureKey(layerId, objectId) { return `${layerId}|${objectId ?? crypto.randomUUID()}`; }
+    function featureKey(layerId, objectId) {
+      return `${layerId}|${objectId ?? crypto.randomUUID()}`;
+    }
 
     function buildParcelSymbol(hex, opacity) {
       const rgba = new Color(hex); rgba.a = Number(opacity);
@@ -146,12 +157,10 @@
     function toggleParcel(graphic, layerId, objectId) {
       const key = featureKey(layerId, objectId);
       if (selectedSet.has(key)) {
-        // remove
         const g = selectedSet.get(key);
         selectionOverlay.remove(g);
         selectedSet.delete(key);
       } else {
-        // add
         const overlayGraphic = new Graphic({
           geometry: graphic.geometry.clone(),
           symbol: buildParcelSymbol($color.value, $opacity.value),
@@ -181,51 +190,284 @@
       return wrapper;
     }
 
+    function getTitleText() {
+      const raw = ($mapTitle?.value || "").trim();
+      const capped = raw.slice(0, 70);
+      return capped.replace(/\s+/g, " ");
+    }
+
+    // ------------------------------
+    // Layout helpers (export)
+    // ------------------------------
+    function formatScale(s) {
+      return `1:${Math.round(s).toLocaleString()}`;
+    }
+
+    function niceScaleDistance(meters) {
+      const pow10 = Math.pow(10, Math.floor(Math.log10(meters)));
+      const n = meters / pow10;
+      const nice = n >= 5 ? 5 : n >= 2 ? 2 : 1;
+      return nice * pow10;
+    }
+
+    function drawNorthArrow(ctx, x, y, size, ratio) {
+      ctx.save();
+      ctx.translate(x, y);
+
+      // arrow
+      ctx.beginPath();
+      ctx.moveTo(0, -size);
+      ctx.lineTo(size * 0.70, size);
+      ctx.lineTo(0, size * 0.55);
+      ctx.lineTo(-size * 0.70, size);
+      ctx.closePath();
+      ctx.fillStyle = "#111";
+      ctx.fill();
+
+      // N label
+      ctx.fillStyle = "#111";
+      ctx.font = `700 ${Math.floor(16 * ratio)}px system-ui, Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText("N", 0, size + Math.floor(10 * ratio));
+
+      ctx.restore();
+    }
+
+    function drawScaleBarDetailed(ctx, view, x, y, totalPx, ratio) {
+      const lat = view.center?.latitude ?? 0;
+      const mPerPx = view.resolution * (Math.cos(lat * Math.PI/180) || 1);
+
+      // total bar distance (meters)
+      const targetMeters = mPerPx * totalPx;
+      const totalMeters = niceScaleDistance(targetMeters);
+
+      const segments = 4;
+      const segMeters = totalMeters / segments;
+      const segPx = (segMeters / mPerPx);
+
+      const barH = Math.floor(10 * ratio);
+      const tickH = Math.floor(10 * ratio);
+      const labelGap = Math.floor(6 * ratio);
+
+      ctx.save();
+      ctx.lineWidth = Math.max(2, Math.floor(2 * ratio));
+      ctx.strokeStyle = "#111";
+
+      // alternating segments
+      for (let i = 0; i < segments; i++) {
+        const sx = x + i * segPx;
+        ctx.beginPath();
+        ctx.rect(sx, y, segPx, barH);
+        ctx.fillStyle = (i % 2 === 0) ? "#111" : "#fff";
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // ticks + labels
+      ctx.fillStyle = "#111";
+      ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+
+      for (let i = 0; i <= segments; i++) {
+        const tx = x + i * segPx;
+        ctx.beginPath();
+        ctx.moveTo(tx, y);
+        ctx.lineTo(tx, y - tickH);
+        ctx.stroke();
+
+        const meters = segMeters * i;
+        const label = meters >= 1000
+          ? `${(meters/1000).toFixed(meters % 1000 === 0 ? 0 : 1)}`
+          : `${Math.round(meters)}`;
+        ctx.fillText(label, tx, y - tickH - labelGap);
+      }
+
+      // units + scale ratio
+      const units = totalMeters >= 1000 ? "km" : "m";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
+      ctx.fillText(units, x + totalPx + Math.floor(10 * ratio), y + barH);
+
+      ctx.textAlign = "right";
+      ctx.font = `600 ${Math.floor(12 * ratio)}px system-ui, Arial`;
+      ctx.fillText(formatScale(view.scale), x + totalPx, y + barH + Math.floor(28 * ratio));
+
+      ctx.restore();
+    }
+
+    async function exportLayoutJpg() {
+      const ratio = Number($pixelRatio.value) || 1;
+
+      // Grab map screenshot
+      const shot = await view.takeScreenshot({
+        format: "png",
+        quality: 1,
+        width: Math.floor(view.width * ratio),
+        height: Math.floor(view.height * ratio)
+      });
+
+      const img = new Image();
+      img.src = shot.dataUrl;
+      await img.decode();
+
+      // Layout sizing
+      const margin = Math.floor(24 * ratio);
+      const framePad = Math.floor(10 * ratio);
+      const headerH = Math.floor(62 * ratio);
+      const footerH = Math.floor(160 * ratio);
+
+      const mapW = shot.data.width;
+      const mapH = shot.data.height;
+
+      const contentW = mapW + framePad * 2;
+      const contentH = headerH + mapH + footerH + framePad * 2;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = contentW + margin * 2;
+      canvas.height = contentH + margin * 2;
+      const ctx = canvas.getContext("2d");
+
+      // Background
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const x0 = margin;
+      const y0 = margin;
+
+      // Outer border
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = Math.max(2, Math.floor(2 * ratio));
+      ctx.strokeRect(x0, y0, contentW, contentH);
+
+      // Map frame rect
+      const mapX = x0 + framePad;
+      const mapY = y0 + headerH + framePad;
+      const footerTop = mapY + mapH + framePad;
+
+      // Header band
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(x0 + 1, y0 + 1, contentW - 2, headerH - 1);
+
+      // Footer band
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(x0 + 1, footerTop, contentW - 2, footerH);
+
+      // Title
+      const title = getTitleText() || "Project Site Map";
+      ctx.fillStyle = "#111";
+      ctx.font = `700 ${Math.floor(18 * ratio)}px system-ui, Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(title, x0 + contentW / 2, y0 + headerH / 2);
+
+      // Map frame + image
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = Math.max(1, Math.floor(1 * ratio));
+      ctx.strokeRect(mapX, mapY, mapW, mapH);
+      ctx.drawImage(img, mapX, mapY, mapW, mapH);
+
+      // Footer divider line (between map and footer)
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = Math.max(1, Math.floor(1 * ratio));
+      ctx.beginPath();
+      ctx.moveTo(x0, footerTop);
+      ctx.lineTo(x0 + contentW, footerTop);
+      ctx.stroke();
+
+      // Footer content layout
+      const pad = Math.floor(14 * ratio);
+
+      // Legend (bigger)
+      const sw = Math.floor(34 * ratio);
+      const legendX = x0 + pad;
+      const legendY = footerTop + pad;
+
+      ctx.strokeStyle = $color.value;
+      ctx.lineWidth = Math.max(3, Math.floor(3 * ratio));
+      ctx.strokeRect(legendX, legendY, sw, sw);
+
+      ctx.fillStyle = "#111";
+      ctx.font = `${Math.floor(16 * ratio)}px system-ui, Arial`;
+      const legendLabel = selectionOverlay.graphics.length === 1 ? "Selected parcel" : `Selected parcels (${selectionOverlay.graphics.length})`;
+      ctx.fillText(legendLabel, legendX + sw + Math.floor(12 * ratio), legendY + Math.floor(sw * 0.75));
+
+      // Attribution / disclaimer (professional)
+      ctx.fillStyle = "#444";
+      ctx.font = `${Math.floor(10.5 * ratio)}px system-ui, Arial`;
+      const lines = [
+        "Sources: Esri; Permit Sonoma; City of Petaluma; and other contributing data providers.",
+        "Map prepared via a third-party web mapping application accessed by a City contractor.",
+        "This map is for general reference only to illustrate the project site in connection with required public notice materials."
+      ];
+      let ty = legendY + sw + Math.floor(18 * ratio);
+      for (const line of lines) {
+        ctx.fillText(line, legendX, ty);
+        ty += Math.floor(14 * ratio);
+      }
+
+      // North arrow + scalebar on right
+      const rightX = x0 + contentW - pad;
+      const arrowX = rightX - Math.floor(90 * ratio);
+      const arrowY = footerTop + pad + Math.floor(24 * ratio);
+      drawNorthArrow(ctx, arrowX, arrowY, Math.floor(22 * ratio), ratio);
+
+      const scaleBarWidth = Math.floor(240 * ratio);
+      const scaleX = rightX - scaleBarWidth;
+      const scaleY = footerTop + pad + Math.floor(34 * ratio);
+      drawScaleBarDetailed(ctx, view, scaleX, scaleY, scaleBarWidth, ratio);
+
+      // Export
+      const outUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const a = document.createElement("a");
+      a.href = outUrl;
+      a.download = `parcel_map_${Date.now()}.jpg`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    // ------------------------------
+    // Bootstrap
+    // ------------------------------
     async function bootstrap() {
       await webmap.loadAll();
-// Find the parcel layer you want to search against
-const parcelLayer = webmap.allLayers.find(l => (l.title || "").toLowerCase() === "petaluma parcels_22_0210") 
-  || webmap.allLayers.find(l => (l.title || "").toLowerCase() === "sonoma county parcels");
 
-// If your parcels layer is a FeatureLayer, you can add a FeatureLayer search source.
-// IMPORTANT: use fields that actually exist in your layer (examples: "SITE_ADDR", "FULLADDR", "APN")
-const parcelSource = parcelLayer && parcelLayer.type === "feature"
-  ? {
-      layer: parcelLayer,
-      searchFields: ["SITE_ADDR", "FULLADDR", "APN"],
-      displayField: "SITE_ADDR",
-      exactMatch: false,
-      outFields: ["*"],
-      name: parcelLayer.title,
-      placeholder: "Address or APN (parcel layer)"
-    }
-  : null;
+      // Search widget (reliable container)
+      const parcelLayer =
+        webmap.allLayers.find(l => (l.title || "").toLowerCase() === "petaluma parcels_22_0210") ||
+        webmap.allLayers.find(l => (l.title || "").toLowerCase() === "sonoma county parcels");
 
-const search = new Search({
-  view,
-  includeDefaultSources: true,        // World geocoder
-  popupEnabled: false,
-  resultGraphicEnabled: true,
-  sources: [
-    ...(parcelSource ? [parcelSource] : []),
-    // keep the default geocoder too (user can type any address)
-  ]
-});
+      const parcelSource = (parcelLayer && parcelLayer.type === "feature") ? {
+        layer: parcelLayer,
+        searchFields: ["SITE_ADDR", "FULLADDR", "APN"],
+        displayField: "SITE_ADDR",
+        exactMatch: false,
+        outFields: ["*"],
+        name: parcelLayer.title,
+        placeholder: "Address or APN (parcel layer)"
+      } : null;
 
-// Put it in your existing left panel (cleanest)
-const panel = document.querySelector(".panel");
-const searchDiv = document.createElement("div");
-searchDiv.style.marginBottom = "10px";
-panel.prepend(searchDiv);
+      const search = new Search({
+        view,
+        includeDefaultSources: true,
+        popupEnabled: false,
+        resultGraphicEnabled: true,
+        sources: [
+          ...(parcelSource ? [parcelSource] : [])
+        ]
+      });
 
-search.container = searchDiv;
+      // IMPORTANT: set container explicitly
+      search.container = $searchHolder;
 
-
-      // Build visibility list (all layers)
+      // Layer visibility list
       $layersContainer.innerHTML = "";
       webmap.allLayers.forEach(layer => $layersContainer.appendChild(buildLayerCheckbox(layer)));
 
-      // Initialize UI from first selectable layer's defaults (if present)
+      // Initialize style defaults from first selectable
       const firstSelectable = webmap.allLayers.find(isSelectableLayer);
       if (firstSelectable?.renderer) {
         try {
@@ -239,23 +481,12 @@ search.container = searchDiv;
         } catch {}
       }
 
-      say("Click parcels to toggle selection. Use color/opacity to style. Export JPG when ready.");
+      say("Click parcels to toggle selection. Use Export JPG for the layout map.");
     }
-$pixelRatio.addEventListener("input", () => {
-  $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
-});
 
-$exportJpgBtn.addEventListener("click", async () => {
-  try {
-    await exportLayoutJpg();
-    say("Layout JPG exported.");
-  } catch (e) {
-    console.error(e);
-    say("Export failed.", false);
-  }
-});
-
-    // Update styles live
+    // ------------------------------
+    // UI bindings
+    // ------------------------------
     $color.addEventListener("input", () => { restyleAllSelected(); say("Updated color."); });
     $opacity.addEventListener("input", () => {
       const v = $opacity.value; $opacityValue.textContent = Number(v).toFixed(2);
@@ -269,160 +500,25 @@ $exportJpgBtn.addEventListener("click", async () => {
       say("Selection cleared.");
     });
 
-    // Export JPG
-   function fmtDate(d = new Date()) {
-  const mm = String(d.getMonth() + 1).padStart(2,"0");
-  const dd = String(d.getDate()).padStart(2,"0");
-  const yyyy = d.getFullYear();
-  return `${mm}/${dd}/${yyyy}`;
-}
+    $pixelRatio.addEventListener("input", () => {
+      $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
+    });
 
-function getSelectedLabel() {
-  // you can improve this by storing address/APN when selecting
-  const n = selectionOverlay.graphics.length;
-  return n === 1 ? "Selected parcel" : `Selected parcels (${n})`;
-}
-
-// simple north arrow (triangle) drawn in footer
-function drawNorthArrow(ctx, x, y, size) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.beginPath();
-  ctx.moveTo(0, -size);
-  ctx.lineTo(size * 0.7, size);
-  ctx.lineTo(-size * 0.7, size);
-  ctx.closePath();
-  ctx.fillStyle = "#111";
-  ctx.fill();
-  ctx.restore();
-}
-
-// very simple scalebar: choose a nice round distance near ~1/5 of map width
-function niceScaleDistance(meters) {
-  const pow10 = Math.pow(10, Math.floor(Math.log10(meters)));
-  const n = meters / pow10;
-  const nice = n >= 5 ? 5 : n >= 2 ? 2 : 1;
-  return nice * pow10;
-}
-
-function drawScaleBar(ctx, view, x, y, pxWidth) {
-  // approx meters-per-pixel at center latitude
-  const lat = view.center?.latitude ?? 0;
-  const mPerPx = view.resolution * (Math.cos(lat * Math.PI/180) || 1); // decent approximation for web mercator
-  const targetMeters = mPerPx * pxWidth * 0.35;
-  const distMeters = niceScaleDistance(targetMeters);
-  const barPx = distMeters / mPerPx;
-
-  // draw bar
-  ctx.save();
-  ctx.strokeStyle = "#111";
-  ctx.fillStyle = "#111";
-  ctx.lineWidth = 2;
-
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x + barPx, y);
-  ctx.stroke();
-
-  // ticks
-  ctx.beginPath();
-  ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8);
-  ctx.moveTo(x + barPx, y - 8); ctx.lineTo(x + barPx, y + 8);
-  ctx.stroke();
-
-  // label
-  const label = distMeters >= 1000 ? `${(distMeters/1000).toFixed(distMeters % 1000 === 0 ? 0 : 1)} km` : `${Math.round(distMeters)} m`;
-  ctx.font = "12px system-ui, Arial";
-  ctx.fillText(label, x, y - 12);
-  ctx.restore();
-}
-
-async function exportLayoutJpg() {
-  const ratio = Number($pixelRatio.value) || 1;
-
-  // 1) get map image
-  const shot = await view.takeScreenshot({
-    format: "png",
-    quality: 1,
-    width: Math.floor(view.width * ratio),
-    height: Math.floor(view.height * ratio)
-  });
-
-  // 2) create layout canvas (map + footer)
-  const footerH = Math.floor(110 * ratio);
-  const W = shot.data.width;
-  const H = shot.data.height + footerH;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-
-  // background
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, W, H);
-
-  // draw map image
-  const img = new Image();
-  img.src = shot.dataUrl;
-  await img.decode();
-  ctx.drawImage(img, 0, 0, W, shot.data.height);
-
-  // footer divider line
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = Math.max(1, Math.floor(1 * ratio));
-  ctx.beginPath();
-  ctx.moveTo(0, shot.data.height);
-  ctx.lineTo(W, shot.data.height);
-  ctx.stroke();
-
-  // footer content
-  const pad = Math.floor(14 * ratio);
-  const footerTop = shot.data.height;
-  const midY = footerTop + Math.floor(footerH / 2);
-
-  // left: date + legend
-  ctx.fillStyle = "#111";
-  ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
-  ctx.fillText(fmtDate(), pad, footerTop + pad + Math.floor(12 * ratio));
-
-  // legend swatch (use current selection color)
-  const sw = Math.floor(26 * ratio);
-  const lx = pad;
-  const ly = footerTop + Math.floor(footerH * 0.55) - Math.floor(sw/2);
-
-  ctx.strokeStyle = $color.value;
-  ctx.lineWidth = Math.max(2, Math.floor(3 * ratio));
-  ctx.strokeRect(lx, ly, sw, sw);
-
-  ctx.fillStyle = "#111";
-  ctx.font = `${Math.floor(13 * ratio)}px system-ui, Arial`;
-  ctx.fillText(getSelectedLabel(), lx + sw + Math.floor(10 * ratio), ly + Math.floor(sw*0.72));
-
-  // center/right: north arrow + scalebar
-  const nx = Math.floor(W * 0.62);
-  drawNorthArrow(ctx, nx, midY, Math.floor(18 * ratio));
-  drawScaleBar(ctx, view, nx + Math.floor(45 * ratio), midY + Math.floor(18 * ratio), W);
-
-  // optional: title bottom-right
-  ctx.font = `${Math.floor(11 * ratio)}px system-ui, Arial`;
-  ctx.fillStyle = "#444";
-  ctx.fillText("City of Petaluma", W - pad - Math.floor(140 * ratio), footerTop + footerH - pad);
-
-  // 3) export canvas as JPG
-  const outUrl = canvas.toDataURL("image/jpeg", 0.92);
-  const a = document.createElement("a");
-  a.href = outUrl;
-  a.download = `parcel_map_${Date.now()}.jpg`;
-  document.body.appendChild(a); a.click(); a.remove();
-}
+    $exportJpgBtn.addEventListener("click", async () => {
+      try {
+        await exportLayoutJpg();
+        say("Layout JPG exported.");
+      } catch (e) {
+        console.error(e);
+        say("Export failed.", false);
+      }
+    });
 
     // Click-to-toggle selection (topmost parcel hit from the allowed layers)
     view.on("click", async (event) => {
       const hit = await view.hitTest(event);
       if (!hit?.results?.length) { say("No feature here."); return; }
 
-      // Find the first hit that belongs to an allowed parcel layer
       const match = hit.results.find(r => r.graphic?.layer && isSelectableLayer(r.graphic.layer));
       if (!match) { say("Clicked feature isn’t a parcel in the allowed layers.", false); return; }
 
@@ -436,22 +532,6 @@ async function exportLayoutJpg() {
     });
 
     view.when(bootstrap).catch(err => { console.error(err); say("Failed to load WebMap.", false); });
-$pixelRatio.addEventListener("input", () => {
-  $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
-});
-
-$exportJpgBtn.addEventListener("click", async () => {
-  try {
-    await exportLayoutJpg();
-    say("Layout JPG exported.");
-  } catch (e) {
-    console.error(e);
-    say("Export failed.", false);
-  }
-});
-
   </script>
 </body>
 </html>
-
-
