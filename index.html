@@ -218,7 +218,8 @@ const searchDiv = document.createElement("div");
 searchDiv.style.marginBottom = "10px";
 panel.prepend(searchDiv);
 
-search.container = searchDiv; // ✅ this is the key
+search.container = searchDiv;
+
 
       // Build visibility list (all layers)
       $layersContainer.innerHTML = "";
@@ -435,6 +436,20 @@ async function exportLayoutJpg() {
     });
 
     view.when(bootstrap).catch(err => { console.error(err); say("Failed to load WebMap.", false); });
+$pixelRatio.addEventListener("input", () => {
+  $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
+});
+
+$exportJpgBtn.addEventListener("click", async () => {
+  try {
+    await exportLayoutJpg();
+    say("Layout JPG exported.");
+  } catch (e) {
+    console.error(e);
+    say("Export failed.", false);
+  }
+});
+
   </script>
 </body>
 </html>
