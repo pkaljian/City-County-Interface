@@ -19,12 +19,12 @@
     .row{ display:grid; grid-template-columns:1fr auto; align-items:center; gap:10px; margin:8px 0; }
     .row label{ font-size:13px; color:#333; }
     .muted{ color:#666; font-size:12px; }
-    select,input,button{ border:1px solid #d0d7de; border-radius:8px; padding:7px 10px; font-size:13px; }
+    input,button{ border:1px solid #d0d7de; border-radius:8px; padding:7px 10px; font-size:13px; }
     input[type="range"]{ width:170px; }
     .layer-list{ border:1px solid #e5e7eb; border-radius:10px; padding:8px; background:#fafafa; }
     .layer-item{ display:flex; align-items:center; justify-content:space-between; padding:4px 6px; border-radius:6px; }
     .layer-item:hover{ background:#f0f3f6; }
-    #status{ font-size:12px; color:#0b5; min-height:1em; margin-top:6px; white-space:pre-wrap; }
+    #status{ font-size:12px; min-height:1em; margin-top:6px; white-space:pre-wrap; }
     .btn-row{ display:flex; gap:8px; flex-wrap:wrap; }
     .search-holder{ margin:10px 0 12px; }
   </style>
@@ -36,7 +36,9 @@
   <div class="panel">
     <div class="section">
       <h3><strong>Parcel Styling (Click to select)</strong></h3>
-      <div class="muted">Click parcels to toggle them on/off. Only “Sonoma County Parcels” and “Petaluma Parcels_22_0210” are selectable.</div>
+      <div class="muted">
+        Click parcels to toggle them on/off. Only “Sonoma County Parcels” and “Petaluma Parcels_22_0210” are selectable.
+      </div>
       <div id="searchHolder" class="search-holder"></div>
     </div>
 
@@ -107,7 +109,6 @@
     const $selectedInfo = document.getElementById("selectedInfo");
     const $status = document.getElementById("status");
     const $searchHolder = document.getElementById("searchHolder");
-    const $mapTitle = document.getElementById("mapTitle");
 
     const webmap = new WebMap({ portalItem: { id: WEBMAP_ID } });
     const view = new MapView({ container: "viewDiv", map: webmap });
@@ -125,54 +126,6 @@
     function isSelectableLayer(layer) {
       const title = (layer?.title || "").trim().toLowerCase();
       return selectableTitlesLower.includes(title);
-    }
-
-    function syncSelectedInfo() {
-      const count = selectionOverlay.graphics.length;
-      $selectedInfo.textContent = count ? `Selected parcels: ${count}` : "No parcels selected.";
-    }
-
-    function featureKey(layerId, objectId) {
-      return `${layerId}|${objectId ?? crypto.randomUUID()}`;
-    }
-
-    function buildParcelSymbol(hex, opacity) {
-      const rgba = new Color(hex);
-      rgba.a = Number(opacity);
-      return { type: "simple-fill", color: rgba, outline: { color: [0,0,0,0.35], width: 1 } };
-    }
-
-    function restyleAllSelected() {
-      const color = $color.value, op = $opacity.value;
-      selectionOverlay.graphics.forEach(g => { g.symbol = buildParcelSymbol(color, op); });
-    }
-
-    function getParcelLabel(g) {
-      const a = g?.attributes || {};
-      const candidates = ["SITE_ADDR","FULLADDR","ADDRESS","ADDR","SITUSADDR","SITUS","APN","APN_NUM","PARCELAPN"];
-      for (const k of candidates) {
-        const v = a[k];
-        if (v !== undefined && v !== null && String(v).trim()) return String(v).trim();
-      }
-      return "Project Site";
-    }
-
-    function toggleParcel(graphic, layerId, objectId) {
-      const key = featureKey(layerId, objectId);
-      if (selectedSet.has(key)) {
-        const g = selectedSet.get(key);
-        selectionOverlay.remove(g);
-        selectedSet.delete(key);
-      } else {
-        const overlayGraphic = new Graphic({
-          geometry: graphic.geometry.clone(),
-          symbol: buildParcelSymbol($color.value, $opacity.value),
-          attributes: { layerId, objectId, label: getParcelLabel(graphic) }
-        });
-        selectionOverlay.add(overlayGraphic);
-        selectedSet.set(key, overlayGraphic);
-      }
-      syncSelectedInfo();
     }
 
     function buildLayerCheckbox(layer) {
@@ -198,53 +151,83 @@
       return wrapper;
     }
 
-    function getTitleText() {
-      const raw = ($mapTitle?.value || "").trim();
-      return raw.slice(0, 70).replace(/\s+/g, " ") || "Project Site Map";
+    function syncSelectedInfo() {
+      const count = selectionOverlay.graphics.length;
+      $selectedInfo.textContent = count ? `Selected parcels: ${count}` : "No parcels selected.";
     }
 
-    // (Your exportLayoutJpg() + helpers stay exactly as you already had them)
-    // ---------------------------------------------------------------
-    // NOTE: Keep your existing exportLayoutJpg() block below unchanged
-    // ---------------------------------------------------------------
+    function featureKey(layerId, objectId) {
+      return `${layerId}|${objectId ?? crypto.randomUUID()}`;
+    }
+
+    function buildParcelSymbol(hex, opacity) {
+      const rgba = new Color(hex);
+      rgba.a = Number(opacity);
+      return { type: "simple-fill", color: rgba, outline: { color: [0,0,0,0.35], width: 1 } };
+    }
+
+    function restyleAllSelected() {
+      const color = $color.value, op = $opacity.value;
+      selectionOverlay.graphics.forEach(g => { g.symbol = buildParcelSymbol(color, op); });
+    }
+
+    function toggleParcel(graphic, layerId, objectId) {
+      const key = featureKey(layerId, objectId);
+      if (selectedSet.has(key)) {
+        const g = selectedSet.get(key);
+        selectionOverlay.remove(g);
+        selectedSet.delete(key);
+      } else {
+        const overlayGraphic = new Graphic({
+          geometry: graphic.geometry.clone(),
+          symbol: buildParcelSymbol($color.value, $opacity.value),
+          attributes: { layerId, objectId }
+        });
+        selectionOverlay.add(overlayGraphic);
+        selectedSet.set(key, overlayGraphic);
+      }
+      syncSelectedInfo();
+    }
+
+    // TODO: keep your existing exportLayoutJpg() function here (unchanged)
+    async function exportLayoutJpg() {
+      const shot = await view.takeScreenshot({ format: "jpg", quality: 0.92 });
+      const a = document.createElement("a");
+      a.href = shot.dataUrl;
+      a.download = `parcel_map_${Date.now()}.jpg`;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
 
     async function bootstrap() {
       await webmap.load();
       await webmap.loadAll();
 
-      // ---- Search: ALWAYS render ----
-      const all = webmap.allLayers.toArray();
-      const parcelLayer =
-        all.find(l => l.type === "feature" && isSelectableLayer(l)) ||
-        all.find(l => l.type === "feature" && (l.title || "").toLowerCase().includes("parcel"));
-
-      const parcelSource = parcelLayer ? {
-        layer: parcelLayer,
-        searchFields: ["SITE_ADDR", "FULLADDR", "APN"],
-        displayField: "SITE_ADDR",
-        exactMatch: false,
-        outFields: ["*"],
-        name: parcelLayer.title,
-        placeholder: "Address or APN (parcel layer)"
-      } : null;
-
-      const searchOpts = {
+      // Search ALWAYS (world geocoder)
+      new Search({
         view,
         container: $searchHolder,
         includeDefaultSources: true,
         popupEnabled: false,
         resultGraphicEnabled: true
-      };
-      if (parcelSource) searchOpts.sources = [parcelSource];
-      new Search(searchOpts);
-
-      // ---- Layer list: use toArray() ----
-      $layersContainer.innerHTML = "";
-      webmap.allLayers.toArray().forEach(layer => {
-        $layersContainer.appendChild(buildLayerCheckbox(layer));
       });
 
-      say("Loaded. Click parcels to toggle selection.");
+      // Layer list (whatever actually loaded)
+      $layersContainer.innerHTML = "";
+      const layers = webmap.allLayers.toArray();
+      layers.forEach(layer => $layersContainer.appendChild(buildLayerCheckbox(layer)));
+
+      // Warn if your parcel layers are blocked (CORS/PNA)
+      const selectable = layers.filter(isSelectableLayer);
+      if (!selectable.length) {
+        say(
+          "Map loaded, but parcel layers did not.\n" +
+          "Your console shows CORS / Private Network Access blocking requests to maps.cityofpetaluma.net.\n" +
+          "Fix requires server/proxy changes or hosting the app on the same domain.",
+          false
+        );
+      } else {
+        say("Loaded. Click parcels to toggle selection.");
+      }
     }
 
     $color.addEventListener("input", () => { restyleAllSelected(); say("Updated color."); });
@@ -266,8 +249,10 @@
       $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
     });
 
-    // NOTE: wire your export button to your existing exportLayoutJpg()
-    // $exportJpgBtn.addEventListener("click", async () => { await exportLayoutJpg(); });
+    $exportJpgBtn.addEventListener("click", async () => {
+      try { await exportLayoutJpg(); say("JPG exported."); }
+      catch (e) { console.error(e); say("Export failed.", false); }
+    });
 
     view.on("click", async (event) => {
       const hit = await view.hitTest(event);
