@@ -213,7 +213,12 @@ const search = new Search({
 });
 
 // Put it in your existing left panel (cleanest)
-document.querySelector(".panel").prepend(search.container);
+const panel = document.querySelector(".panel");
+const searchDiv = document.createElement("div");
+searchDiv.style.marginBottom = "10px";
+panel.prepend(searchDiv);
+
+search.container = searchDiv; // ✅ this is the key
 
       // Build visibility list (all layers)
       $layersContainer.innerHTML = "";
@@ -235,6 +240,19 @@ document.querySelector(".panel").prepend(search.container);
 
       say("Click parcels to toggle selection. Use color/opacity to style. Export JPG when ready.");
     }
+$pixelRatio.addEventListener("input", () => {
+  $pxrVal.textContent = Number($pixelRatio.value).toFixed(1);
+});
+
+$exportJpgBtn.addEventListener("click", async () => {
+  try {
+    await exportLayoutJpg();
+    say("Layout JPG exported.");
+  } catch (e) {
+    console.error(e);
+    say("Export failed.", false);
+  }
+});
 
     // Update styles live
     $color.addEventListener("input", () => { restyleAllSelected(); say("Updated color."); });
