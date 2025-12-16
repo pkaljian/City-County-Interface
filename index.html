@@ -485,13 +485,15 @@ drawNorthArrow(ctx, arrowX, arrowY, Math.floor(22 * ratio), ratio);
     // ------------------------------
     // Bootstrap
     // ------------------------------
-    async function bootstrap() {
-      await webmap.loadAll();
+   async function bootstrap() {
+  // Force-load the portal item early so we get a clean error if it's private/wrong-type
+  await webmap.load();       // loads portal item metadata
+  await webmap.loadAll();    // loads layers
 
       // Search widget (reliable container)
-      const parcelLayer =
-        webmap.allLayers.find(l => (l.title || "").toLowerCase() === "petaluma parcels_22_0210") ||
-        webmap.allLayers.find(l => (l.title || "").toLowerCase() === "sonoma county parcels");
+    const parcelLayer =
+  webmap.allLayers.find(l => isSelectableLayer(l)) ||
+  webmap.allLayers.find(l => (l.title || "").toLowerCase().includes("parcel"));
 
       const parcelSource = (parcelLayer && parcelLayer.type === "feature") ? {
         layer: parcelLayer,
@@ -584,7 +586,11 @@ drawNorthArrow(ctx, arrowX, arrowY, Math.floor(22 * ratio), ratio);
       say("Toggled parcel selection.");
     });
 
-    view.when(bootstrap).catch(err => { console.error(err); say("Failed to load WebMap.", false); });
+    view.when(bootstrap).catch(err => {
+  console.error("BOOTSTRAP/WEBMAP ERROR:", err);
+  say(err?.message || "Failed to load WebMap.", false);
+});
+
   </script>
 </body>
 </html>
