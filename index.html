@@ -109,6 +109,278 @@
     const $selectedInfo = document.getElementById("selectedInfo");
     const $status = document.getElementById("status");
     const $searchHolder = document.getElementById("searchHolder");
+// ------------------------------
+// Layout Export (JPG)
+// ------------------------------
+function formatScale(s) {
+  return `1:${Math.round(s).toLocaleString()}`;
+}
+
+function niceScaleDistance(meters) {
+  const pow10 = Math.pow(10, Math.floor(Math.log10(meters)));
+  const n = meters / pow10;
+  const nice = n >= 5 ? 5 : n >= 2 ? 2 : 1;
+  return nice * pow10;
+}
+
+function getTitleText() {
+  const raw = ($mapTitle?.value || "").trim();
+  const capped = raw.slice(0, 70);
+  return capped.replace(/\s+/g, " ");
+}
+
+function getParcelLabelFromOverlayGraphic(overlayGraphic) {
+  // We stored label on selectionOverlay graphics as attributes.label
+  const v = overlayGraphic?.attributes?.label;
+  return (v && String(v).trim()) ? String(v).trim() : "Project Site";
+}
+
+function drawNorthArrow(ctx, x, y, size, ratio) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  // arrow
+  ctx.beginPath();
+  ctx.moveTo(0, -size);
+  ctx.lineTo(size * 0.70, size);
+  ctx.lineTo(0, size * 0.55);
+  ctx.lineTo(-size * 0.70, size);
+  ctx.closePath();
+  ctx.fillStyle = "#111";
+  ctx.fill();
+
+  // N label
+  ctx.fillStyle = "#111";
+  ctx.font = `800 ${Math.floor(18 * ratio)}px system-ui, Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("N", 0, size + Math.floor(10 * ratio));
+
+  ctx.restore();
+}
+
+function drawScaleBarDetailed(ctx, view, x, y, totalPx, ratio) {
+  const lat = view.center?.latitude ?? 0;
+  const mPerPx = view.resolution * (Math.cos(lat * Math.PI / 180) || 1);
+
+  // total bar distance (meters)
+  const targetMeters = mPerPx * totalPx;
+  const totalMeters = niceScaleDistance(targetMeters);
+
+  const segments = 4;
+  const segMeters = totalMeters / segments;
+  const segPx = (segMeters / mPerPx);
+
+  const barH = Math.floor(10 * ratio);
+  const tickH = Math.floor(10 * ratio);
+  const labelGap = Math.floor(6 * ratio);
+
+  ctx.save();
+  ctx.lineWidth = Math.max(2, Math.floor(2 * ratio));
+  ctx.strokeStyle = "#111";
+
+  // alternating segments
+  for (let i = 0; i < segments; i++) {
+    const sx = x + i * segPx;
+    ctx.beginPath();
+    ctx.rect(sx, y, segPx, barH);
+    ctx.fillStyle = (i % 2 === 0) ? "#111" : "#fff";
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // ticks + labels
+  ctx.fillStyle = "#111";
+  ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+
+  for (let i = 0; i <= segments; i++) {
+    const tx = x + i * segPx;
+    ctx.beginPath();
+    ctx.moveTo(tx, y);
+    ctx.lineTo(tx, y - tickH);
+    ctx.stroke();
+
+    const meters = segMeters * i;
+    const label = meters >= 1000
+      ? `${(meters / 1000).toFixed(meters % 1000 === 0 ? 0 : 1)}`
+      : `${Math.round(meters)}`;
+    ctx.fillText(label, tx, y - tickH - labelGap);
+  }
+
+  // units + scale ratio
+  const units = totalMeters >= 1000 ? "km" : "m";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = `${Math.floor(12 * ratio)}px system-ui, Arial`;
+
+  // keep units INSIDE border: caller should place x so this fits.
+  ctx.fillText(units, x + totalPx + Math.floor(8 * ratio), y + barH);
+
+  ctx.textAlign = "right";
+  ctx.font = `700 ${Math.floor(12 * ratio)}px system-ui, Arial`;
+  ctx.fillText(formatScale(view.scale), x + totalPx, y + barH + Math.floor(28 * ratio));
+
+  ctx.restore();
+}
+
+async function exportLayoutJpg() {
+  const ratio = Number($pixelRatio.value) || 1;
+
+  // 1) screenshot of map view
+  const shot = await view.takeScreenshot({
+    format: "png",
+    quality: 1,
+    width: Math.floor(view.width * ratio),
+    height: Math.floor(view.height * ratio)
+  });
+
+  const img = new Image();
+  img.src = shot.dataUrl;
+  await img.decode();
+
+  // 2) layout sizing
+  const margin = Math.floor(24 * ratio);
+  const framePad = Math.floor(10 * ratio);
+  const headerH = Math.floor(78 * ratio);   // a bit taller header
+  const footerH = Math.floor(170 * ratio);
+
+  const mapW = shot.data.width;
+  const mapH = shot.data.height;
+
+  const contentW = mapW + framePad * 2;
+  const contentH = headerH + mapH + footerH + framePad * 2;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = contentW + margin * 2;
+  canvas.height = contentH + margin * 2;
+  const ctx = canvas.getContext("2d");
+
+  // background
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const x0 = margin;
+  const y0 = margin;
+
+  // outer border
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = Math.max(2, Math.floor(2 * ratio));
+  ctx.strokeRect(x0, y0, contentW, contentH);
+
+  // map frame coords
+  const mapX = x0 + framePad;
+  const mapY = y0 + headerH + framePad;
+  const footerTop = mapY + mapH + framePad;
+
+  // header band
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x0 + 1, y0 + 1, contentW - 2, headerH - 1);
+
+  // footer band
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(x0 + 1, footerTop, contentW - 2, footerH);
+
+  // title (BIG)
+  const title = getTitleText() || "Project Site Map";
+  ctx.fillStyle = "#111";
+  ctx.font = `900 ${Math.floor(40 * ratio)}px system-ui, Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(title, x0 + contentW / 2, y0 + headerH / 2);
+
+  // map frame + image
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = Math.max(1, Math.floor(1 * ratio));
+  ctx.strokeRect(mapX, mapY, mapW, mapH);
+  ctx.drawImage(img, mapX, mapY, mapW, mapH);
+
+  // divider line
+  ctx.beginPath();
+  ctx.moveTo(x0, footerTop);
+  ctx.lineTo(x0 + contentW, footerTop);
+  ctx.stroke();
+
+  // footer padding
+  const pad = Math.floor(14 * ratio);
+
+  // legend
+  const sw = Math.floor(36 * ratio);
+  const legendX = x0 + pad;
+  const legendY = footerTop + pad;
+
+  ctx.strokeStyle = $color.value;
+  ctx.lineWidth = Math.max(3, Math.floor(3 * ratio));
+  ctx.strokeRect(legendX, legendY, sw, sw);
+
+  ctx.fillStyle = "#111";
+  ctx.font = `${Math.floor(16 * ratio)}px system-ui, Arial`;
+
+  const labels = selectionOverlay.graphics
+    .map(g => getParcelLabelFromOverlayGraphic(g))
+    .filter(Boolean);
+
+  if (!labels.length) {
+    ctx.fillText("No parcel selected", legendX + sw + Math.floor(12 * ratio), legendY + Math.floor(sw * 0.78));
+  } else {
+    const maxLines = 3;
+    const show = labels.slice(0, maxLines);
+    const more = labels.length - show.length;
+
+    let ly = legendY + Math.floor(sw * 0.78);
+    for (const line of show) {
+      ctx.fillText(line, legendX + sw + Math.floor(12 * ratio), ly);
+      ly += Math.floor(20 * ratio);
+    }
+    if (more > 0) ctx.fillText(`+${more} more`, legendX + sw + Math.floor(12 * ratio), ly);
+  }
+
+  // scale bar + north arrow (top-right of footer)
+  const rightX = x0 + contentW - pad;
+  const scaleBarWidth = Math.floor(240 * ratio);
+
+  // place scale bar so units stay inside the border
+  const scaleX = rightX - scaleBarWidth - Math.floor(34 * ratio);
+  const scaleY = footerTop + pad + Math.floor(40 * ratio);
+
+  drawScaleBarDetailed(ctx, view, scaleX, scaleY, scaleBarWidth, ratio);
+
+  // arrow left of scale bar
+  const arrowX = scaleX - Math.floor(36 * ratio);
+  const arrowY = footerTop + pad + Math.floor(30 * ratio);
+  drawNorthArrow(ctx, arrowX, arrowY, Math.floor(24 * ratio), ratio);
+
+  // attribution bottom-right (LOW)
+  ctx.fillStyle = "#444";
+  ctx.font = `${Math.floor(10.5 * ratio)}px system-ui, Arial`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "alphabetic";
+
+  const lines = [
+    "Sources: Esri; Permit Sonoma; City of Petaluma; and other contributing data providers.",
+    "Map prepared via a third-party web mapping application accessed by a City contractor.",
+    "This map is for general reference only to illustrate the project site in connection with required public notice materials."
+  ];
+
+  const lineH = Math.floor(14 * ratio);
+  const attrX = x0 + contentW - pad;
+  let attrY = footerTop + footerH - Math.floor(8 * ratio); // pushed lower
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    ctx.fillText(lines[i], attrX, attrY);
+    attrY -= lineH;
+  }
+
+  // export JPG
+  const outUrl = canvas.toDataURL("image/jpeg", 0.92);
+  const a = document.createElement("a");
+  a.href = outUrl;
+  a.download = `parcel_map_${Date.now()}.jpg`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 
     const webmap = new WebMap({ portalItem: { id: WEBMAP_ID } });
     const view = new MapView({ container: "viewDiv", map: webmap });
